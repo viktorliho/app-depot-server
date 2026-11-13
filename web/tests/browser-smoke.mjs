@@ -1,11 +1,22 @@
 import { chromium } from 'playwright-core'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { execFileSync, spawn } from 'node:child_process'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+async function emptyRevisionIndex(page, path) {
+  return page.evaluate(async path => {
+    const response = await fetch(`/api/v1${path}/revisions?pageSize=100`)
+    if (!response.ok) throw new Error(`Revision list failed: ${response.status}`)
+    const revisions = await response.json()
+    const index = revisions.items.findIndex(item => JSON.stringify(item.data) === '{}')
+    if (index < 0) throw new Error('Previous empty declaration revision is missing')
+    return index
+  }, path)
+}
 
 async function startLanPreview() {
   const repository = fileURLToPath(new URL('../..', import.meta.url))
@@ -150,9 +161,192 @@ try {
   await page.getByRole('heading', { name: 'Portal Draft' }).waitFor()
   await page.getByRole('link', { name: 'Add release from file' }).first().click()
   await page.getByRole('heading', { name: 'Add release from file' }).waitFor()
-  await page.getByLabel('File').setInputFiles({ name: 'draft.txt', mimeType: 'text/plain', buffer: Buffer.from('Draft') })
+  await page.getByLabel('File', { exact: true }).setInputFiles({ name: 'draft.txt', mimeType: 'text/plain', buffer: Buffer.from('Draft') })
   await page.getByRole('button', { name: 'Save Draft' }).click()
   await page.getByText('Saved Draft for Portal Draft').waitFor({ timeout: 30000 })
+  if (preview) {
+  await page.getByRole('link', { name: 'Open release' }).click()
+  await page.waitForURL(/\/releases\/[0-9a-f-]{36}$/)
+  const firstReleaseId = new URL(page.url()).pathname.split('/').pop()
+  await page.getByRole('heading', { name: 'Artifacts' }).waitFor()
+  const originalArtifact = (await page.locator('code').filter({ hasText: 'adfile:sha256:' }).first().textContent()).match(/adfile:sha256:[0-9a-f]{64}/)?.[0]
+  if (!originalArtifact) throw new Error('File Artifact identity missing')
+  await page.goto(`${base}apps/${draftId}/settings`)
+  await page.getByRole('heading', { name: 'Application settings' }).waitFor()
+  const staleAppEtag = await page.evaluate(async id => (await fetch(`/api/v1/apps/${id}`)).headers.get('ETag'), draftId)
+  await page.getByLabel('Name', { exact: true }).fill('Portal Draft Edited')
+  await page.getByLabel('Slug', { exact: true }).fill('portal-draft-edited')
+  await page.getByLabel('Visibility').selectOption('Public')
+  await page.getByRole('button', { name: 'Save changes' }).click()
+  await page.getByText('Application settings saved.').waitFor()
+  const staleApp = await page.evaluate(async ({ id, etag, key }) => {
+    const session = await (await fetch('/api/v1/auth/sessions/current')).json()
+    return (await fetch(`/api/v1/apps/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': session.csrfToken,
+      'If-Match': etag, 'Idempotency-Key': key }, body: JSON.stringify({ name: 'Stale edit' }) })).status
+  }, { id: draftId, etag: staleAppEtag, key: randomUUID() })
+  if (staleApp !== 412) throw new Error(`Stale App ETag was accepted: ${staleApp}`)
+  await page.reload()
+  await page.getByRole('navigation', { name: 'Application navigation' }).getByRole('link', { name: 'Declarations' }).click()
+  await page.getByRole('heading', { name: 'Application declarations' }).waitFor()
+  await page.getByLabel('Current JSON value').fill('null')
+  await page.getByRole('button', { name: 'Save new revision' }).click()
+  await page.getByText('Saved as a new declaration revision.').waitFor()
+  const nullDocument = await page.evaluate(async id => (await (await fetch(`/api/v1/apps/${id}/declarations`)).json()).data, draftId)
+  if (nullDocument !== null) throw new Error('Explicit JSON null was not preserved')
+  await page.getByRole('button', { name: 'Show revision history' }).click()
+  await page.getByRole('button', { name: 'Inspect revision' }).nth(await emptyRevisionIndex(page, `/apps/${draftId}/declarations`)).click()
+  await page.getByRole('button', { name: 'Restore as new revision' }).click()
+  await page.getByText('Saved as a new declaration revision.').waitFor()
+  const restoredAppData = await page.evaluate(async id => (await (await fetch(`/api/v1/apps/${id}/declarations`)).json()).data, draftId)
+  if (JSON.stringify(restoredAppData) !== '{}') throw new Error(`App declaration restoration did not create the prior value: ${JSON.stringify(restoredAppData)}`)
+  await page.goto(`${base}apps/${draftId}/releases/new`)
+  await page.getByRole('heading', { name: 'Create Draft release' }).waitFor()
+  await page.getByLabel('Version (optional)').fill('test-v1')
+  await page.getByRole('button', { name: 'Create Draft release' }).click()
+  await page.waitForURL(/\/releases\/[0-9a-f-]{36}$/)
+  const releaseId = new URL(page.url()).pathname.split('/').pop()
+  await page.getByRole('heading', { name: 'test-v1' }).waitFor()
+  const staleReleaseEtag = await page.evaluate(async id => (await fetch(`/api/v1/releases/${id}`)).headers.get('ETag'), releaseId)
+  await page.getByLabel('Version (optional)').fill('test-v2')
+  await page.getByRole('button', { name: 'Save version' }).click()
+  await page.getByRole('heading', { name: 'test-v2' }).waitFor()
+  const staleRelease = await page.evaluate(async ({ id, etag }) => {
+    const session = await (await fetch('/api/v1/auth/sessions/current')).json()
+    return (await fetch(`/api/v1/releases/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json',
+      'X-CSRF-Token': session.csrfToken, 'If-Match': etag }, body: JSON.stringify({ version: 'stale' }) })).status
+  }, { id: releaseId, etag: staleReleaseEtag })
+  if (staleRelease !== 412) throw new Error(`Stale Release ETag was accepted: ${staleRelease}`)
+  await page.getByRole('link', { name: 'Upload Artifact' }).first().click()
+  await page.getByRole('heading', { name: 'Upload Artifact' }).waitFor()
+  const fileBytes = Buffer.from('M9.2 file artifact content')
+  await page.getByLabel('File', { exact: true }).setInputFiles({ name: 'content.txt', mimeType: 'text/plain', buffer: fileBytes })
+  await page.getByRole('button', { name: 'Save Draft' }).click()
+  await page.getByText('Saved Draft for Portal Draft Edited').waitFor({ timeout: 30000 })
+  await page.getByRole('link', { name: 'Open release' }).click()
+  const fileArtifact = (await page.locator('code').filter({ hasText: 'adfile:sha256:' }).first().textContent()).match(/adfile:sha256:[0-9a-f]{64}/)?.[0]
+  if (!fileArtifact) throw new Error('Uploaded File Artifact identity missing')
+  const downloaded = await page.evaluate(async id => Array.from(new Uint8Array(await (await fetch(`/api/v1/artifacts/${encodeURIComponent(id)}/content`)).arrayBuffer())), fileArtifact)
+  if (createHash('sha256').update(Buffer.from(downloaded)).digest('hex') !== fileArtifact.split(':').pop()) throw new Error('Downloaded File Artifact hash mismatch')
+  await page.goto(`${base}apps/${draftId}/releases/${releaseId}/uploads/new`)
+  const largeBytes = Buffer.alloc(4 * 1024 * 1024 + 8, 65)
+  const sentRanges = []
+  let injectedFailure = false
+  await page.route('**/api/v1/uploads/*/files/*', async route => {
+    if (route.request().method() === 'PUT') {
+      const range = route.request().headers()['content-range']
+      sentRanges.push(range)
+      if (range.startsWith('bytes 4194304-') && !injectedFailure) {
+        injectedFailure = true
+        await route.fulfill({ status: 503, contentType: 'application/problem+json', body: JSON.stringify({ title: 'Temporary transfer failure', status: 503 }) })
+        return
+      }
+    }
+    await route.continue()
+  })
+  await page.getByLabel('File', { exact: true }).setInputFiles({ name: 'resume.bin', mimeType: 'application/octet-stream', buffer: largeBytes })
+  await page.getByRole('button', { name: 'Save Draft' }).click()
+  await page.getByText('The server is not ready. Try again after recovery completes.').waitFor()
+  await page.reload()
+  await page.getByLabel('File', { exact: true }).setInputFiles({ name: 'resume.bin', mimeType: 'application/octet-stream', buffer: largeBytes })
+  await page.getByRole('button', { name: 'Save Draft' }).click()
+  await page.getByText('Saved Draft for Portal Draft Edited').waitFor({ timeout: 30000 })
+  await page.unroute('**/api/v1/uploads/*/files/*')
+  if (sentRanges.filter(range => range.startsWith('bytes 0-')).length !== 1 || sentRanges.filter(range => range.startsWith('bytes 4194304-')).length !== 2) {
+    throw new Error(`Upload retry did not honor authoritative ranges: ${JSON.stringify(sentRanges)}`)
+  }
+  await page.getByRole('link', { name: 'Open release' }).click()
+  await page.getByLabel('Current JSON value').first().fill('{"artifact":"data"}')
+  await page.getByRole('button', { name: 'Save new revision' }).first().click()
+  await page.getByText('Saved as a new declaration revision.').first().waitFor()
+  await page.getByRole('button', { name: 'Show revision history' }).first().click()
+  const firstAssociationId = await page.evaluate(async id => (await (await fetch(`/api/v1/releases/${id}/artifacts?pageSize=10`)).json()).items[0].id, releaseId)
+  await page.getByRole('button', { name: 'Inspect revision' }).nth(await emptyRevisionIndex(page, `/associations/${firstAssociationId}/declarations`)).click()
+  await page.getByRole('button', { name: 'Restore as new revision' }).click()
+  await page.getByText('Saved as a new declaration revision.').first().waitFor()
+  await page.getByLabel('Current JSON value').last().fill('{"release":"data"}')
+  await page.getByRole('button', { name: 'Save new revision' }).last().click()
+  await page.getByText('Saved as a new declaration revision.').last().waitFor()
+  const snapshot = await page.evaluate(async id => (await (await fetch(`/api/v1/releases/${id}/declaration-snapshot`)).json()), releaseId)
+  if (snapshot.release.data.release !== 'data' || snapshot.associations.length !== 2) throw new Error('Combined declaration snapshot is incomplete')
+  const treeRoot = join(preview.namespace, 'browser-tree')
+  await mkdir(join(treeRoot, 'nested'), { recursive: true })
+  await writeFile(join(treeRoot, 'nested', 'tree.txt'), 'tree content')
+  await Promise.all(Array.from({ length: 51 }, (_, index) => writeFile(join(treeRoot, `zero-${String(index).padStart(2, '0')}.txt`), '')))
+  await page.goto(`${base}apps/${draftId}/releases/${releaseId}/uploads/new`)
+  await page.getByLabel('Upload mode').selectOption('BareTree')
+  await page.getByLabel('Directory files').setInputFiles(treeRoot)
+  await page.getByLabel('Empty directory paths').fill('browser-tree/empty')
+  await page.getByRole('button', { name: 'Save Draft' }).click()
+  await page.getByText('Saved Draft for Portal Draft Edited').waitFor({ timeout: 30000 })
+  await page.getByRole('link', { name: 'Open release' }).click()
+  await page.getByRole('heading', { name: 'Tree inventory' }).waitFor()
+  await page.getByText('browser-tree/empty').waitFor()
+  await page.getByText('browser-tree/nested/tree.txt').waitFor()
+  const treeFileLink = await page.getByRole('link', { name: 'Download', exact: true }).first().getAttribute('href')
+  const treeBytes = await page.evaluate(async href => Array.from(new Uint8Array(await (await fetch(href)).arrayBuffer())), treeFileLink)
+  if (Buffer.from(treeBytes).toString() !== 'tree content') throw new Error(`Tree file download mismatch: ${treeFileLink} ${Buffer.from(treeBytes).toString()}`)
+  await page.getByRole('button', { name: 'Next inventory page' }).click()
+  await page.getByText('browser-tree/zero-50.txt').waitFor()
+  const zipPath = join(preview.namespace, 'bundle.zip')
+  execFileSync('python3', ['-c', 'import sys,zipfile; z=zipfile.ZipFile(sys.argv[1],"w",zipfile.ZIP_DEFLATED); z.writestr("zip/nested.txt","zip content"); z.close()', zipPath])
+  await page.goto(`${base}apps/${draftId}/releases/${releaseId}/uploads/new`)
+  await page.getByLabel('Upload mode').selectOption('ZipImport')
+  await page.getByLabel('File', { exact: true }).setInputFiles(zipPath)
+  await page.getByRole('button', { name: 'Save Draft' }).click()
+  await page.getByText('Saved Draft for Portal Draft Edited').waitFor({ timeout: 30000 })
+  await page.getByRole('link', { name: 'Open release' }).click()
+  await page.getByText('zip/nested.txt').waitFor()
+  const zipFileLink = await page.locator('li').filter({ hasText: 'zip/nested.txt' }).getByRole('link', { name: 'Download' }).getAttribute('href')
+  const zipBytes = await page.evaluate(async href => Array.from(new Uint8Array(await (await fetch(href)).arrayBuffer())), zipFileLink)
+  if (Buffer.from(zipBytes).toString() !== 'zip content') throw new Error('ZIP-imported file download mismatch')
+  await page.getByLabel('Artifact ID').fill(originalArtifact)
+  await page.getByRole('button', { name: 'Associate Artifact' }).click()
+  await page.getByText('Existing Artifact associated').waitFor()
+  await page.getByRole('button', { name: 'Remove association' }).first().click()
+  await page.getByRole('dialog', { name: 'Remove association' }).getByRole('button', { name: 'Remove association' }).click()
+  await page.getByRole('heading', { name: 'DeleteAssociation operation' }).waitFor()
+  await page.getByRole('button', { name: 'Publish release' }).click()
+  await page.getByText('Release published. Artifact composition is now immutable.').waitFor()
+  if (await page.getByRole('button', { name: 'Associate Artifact' }).count()) throw new Error('Published composition exposed association action')
+  const immutable = await page.evaluate(async ({ releaseId, artifactId, key }) => {
+    const session = await (await fetch('/api/v1/auth/sessions/current')).json()
+    return (await fetch(`/api/v1/releases/${releaseId}/artifacts`, { method: 'POST', headers: { 'Content-Type': 'application/json',
+      'X-CSRF-Token': session.csrfToken, 'Idempotency-Key': key }, body: JSON.stringify({ artifactId }) })).status
+  }, { releaseId, artifactId: originalArtifact, key: randomUUID() })
+  if (immutable !== 409) throw new Error(`Published Release composition was mutable: ${immutable}`)
+  await page.goto(`${base}apps/${draftId}/releases/${firstReleaseId}`)
+  await page.getByRole('button', { name: 'Publish release' }).click()
+  await page.getByText('Release published. Artifact composition is now immutable.').waitFor()
+  await page.goto(`${base}apps/${draftId}/channels`)
+  await page.getByRole('heading', { name: 'Channels', exact: true }).waitFor()
+  await page.getByLabel('Channel name').fill('preview')
+  await page.getByLabel('Published Release', { exact: true }).fill(releaseId)
+  await page.getByRole('button', { name: 'Create channel' }).click()
+  await page.getByText('Channel created.').waitFor()
+  const staleChannelEtag = await page.evaluate(async id => (await fetch(`/api/v1/apps/${id}/channels/preview`)).headers.get('ETag'), draftId)
+  await page.getByLabel('Move to Published Release', { exact: true }).fill(firstReleaseId)
+  await page.getByRole('button', { name: 'Move channel' }).click()
+  await page.getByText('Channel moved.').waitFor({ timeout: 5000 }).catch(async () => { throw new Error(`Channel move failed: ${await page.locator('main').innerText()}`) })
+  const staleChannel = await page.evaluate(async ({ id, etag, releaseId }) => {
+    const session = await (await fetch('/api/v1/auth/sessions/current')).json()
+    return (await fetch(`/api/v1/apps/${id}/channels/preview`, { method: 'PUT', headers: { 'Content-Type': 'application/json',
+      'X-CSRF-Token': session.csrfToken, 'If-Match': etag }, body: JSON.stringify({ releaseId }) })).status
+  }, { id: draftId, etag: staleChannelEtag, releaseId })
+  if (staleChannel !== 412) throw new Error(`Stale Channel ETag was accepted: ${staleChannel}`)
+  await page.getByRole('button', { name: 'Movement history' }).click()
+  await page.getByRole('link', { name: `Release ${firstReleaseId}` }).last().waitFor()
+  await page.getByRole('button', { name: 'Delete channel preview' }).click()
+  await page.getByRole('dialog', { name: 'Delete channel preview' }).getByRole('button', { name: 'Delete channel' }).click()
+  await page.getByRole('heading', { name: 'No channels' }).waitFor()
+  await page.goto(`${base}apps/${draftId}/releases/${firstReleaseId}`)
+  await page.getByRole('button', { name: 'Delete release' }).click()
+  await page.keyboard.press('Escape')
+  if (await page.getByRole('dialog', { name: 'Delete release' }).isVisible()) throw new Error('Confirmation dialog did not close with Escape')
+  await page.getByRole('button', { name: 'Delete release' }).click()
+  await page.getByRole('dialog', { name: 'Delete release' }).getByRole('button', { name: 'Delete release' }).click()
+  await page.getByRole('heading', { name: 'DeleteRelease operation' }).waitFor()
+  await page.getByText('Access has been revoked.').waitFor()
+  }
   await page.goto(`${base}apps`)
   await page.getByRole('heading', { name: 'Applications', exact: true }).waitFor()
   const createKeys = Array.from({ length: 11 }, () => randomUUID())
@@ -174,7 +368,7 @@ try {
   await page.getByRole('button', { name: 'Search' }).click()
   await page.waitForURL('**/apps?q=Portal+Draft')
   await page.reload()
-  await page.getByRole('link', { name: 'Portal Draft', exact: true }).waitFor()
+  await page.getByRole('link', { name: preview ? 'Portal Draft Edited' : 'Portal Draft', exact: true }).waitFor()
   await page.getByLabel('Search applications').fill('No such application')
   await page.getByRole('button', { name: 'Search' }).click()
   await page.waitForURL('**/apps?q=No+such+application').catch(async () => {
@@ -203,11 +397,13 @@ try {
   const name = `Browser smoke ${Date.now()}`
   await page.getByRole('link', { name: 'Upload a new application' }).first().click()
   await page.getByLabel('App name').fill(name)
-  await page.getByLabel('File').setInputFiles({ name: 'a.txt', mimeType: 'text/plain', buffer: Buffer.from('A') })
+  await page.getByLabel('File', { exact: true }).setInputFiles({ name: 'a.txt', mimeType: 'text/plain', buffer: Buffer.from('A') })
   keys.length = 0
   await page.getByRole('button', { name: 'Upload and publish' }).click()
   await page.getByText(`Published ${name}`).waitFor({ timeout: 30000 })
   await page.getByRole('link', { name: 'Open application' }).click()
+  await page.waitForURL(/\/apps\/[0-9a-f-]{36}$/)
+  const privateAppId = new URL(page.url()).pathname.split('/').pop()
   await page.getByText('Published', { exact: true }).first().waitFor()
   await page.getByText('Private', { exact: true }).first().waitFor()
   const uuidV4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -239,6 +435,13 @@ try {
   if (manifest.formatVersion !== 1 || !manifest.members.some(member => member.kind === 'SqliteSnapshot')) {
     throw new Error('Backup manifest is incomplete')
   }
+  if (preview) {
+    await page.goto(`${base}apps/${draftId}/settings`)
+    await page.getByRole('button', { name: 'Delete application' }).click()
+    await page.getByRole('dialog', { name: 'Delete application' }).getByRole('button', { name: 'Delete application' }).click()
+    await page.getByRole('heading', { name: 'DeleteApp operation' }).waitFor()
+    await page.getByText('Access has been revoked.').waitFor()
+  }
   const readerPassword = 'browser reader password 12345'
   await page.evaluate(async ({ key, readerPassword }) => {
     const session = await (await fetch('/api/v1/auth/sessions/current')).json()
@@ -257,6 +460,8 @@ try {
   await reader.getByRole('button', { name: 'Sign in' }).click()
   await reader.getByRole('heading', { name: 'Create application' }).waitFor()
   await reader.getByText('Publish permission is required to create an application.').waitFor()
+  await reader.goto(`${base}apps/${privateAppId}/settings`)
+  await reader.getByRole('heading', { name: 'Application unavailable' }).waitFor()
   await reader.goto(base)
   await reader.getByRole('heading', { name: 'Server overview' }).waitFor()
   if (diagnosticRequests.length) throw new Error('Non-Admin browser requested protected diagnostics')
@@ -271,7 +476,7 @@ try {
   })
   await page.reload()
   await page.getByRole('heading', { name: 'Sign in' }).waitFor()
-  console.log('Browser smoke passed: setup, auth, navigation, Apps, themes, LAN HTTP upload/publish and backup')
+  console.log('Browser smoke passed: setup, auth, App/Release management, File/Tree/ZIP, declarations, channels, deletion, LAN HTTP and backup')
 } finally {
   await browser?.close()
   if (preview) {

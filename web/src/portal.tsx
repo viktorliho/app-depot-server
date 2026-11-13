@@ -171,7 +171,9 @@ export function AppShell({ app, children }: { app?: DepotApp; children: ReactNod
     try { await apiRequest('/auth/sessions/current', { method: 'DELETE', csrf: session.csrfToken, authenticated: true }); signedOut() }
     catch (error) { setLogoutError(error) }
   }
-  const links = app ? [{ to: `/apps/${app.id}`, label: 'Overview', end: true }, { to: `/apps/${app.id}/releases`, label: 'Releases', end: false }]
+  const links = app ? [{ to: `/apps/${app.id}`, label: 'Overview', end: true }, { to: `/apps/${app.id}/releases`, label: 'Releases', end: false },
+    { to: `/apps/${app.id}/channels`, label: 'Channels', end: false }, { to: `/apps/${app.id}/declarations`, label: 'Declarations', end: false },
+    { to: `/apps/${app.id}/settings`, label: 'Settings', end: false }]
     : [{ to: '/', label: 'Overview', end: true }, { to: '/apps', label: 'Applications', end: false }]
   return <div className="app-shell">
     <a className="skip-link" href="#main-content">Skip to content</a>

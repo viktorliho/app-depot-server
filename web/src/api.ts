@@ -7,9 +7,20 @@ export type DepotApp = { id: string; name: string; slug: string; ownerId: string
 export type AppPage = { items: DepotApp[]; nextCursor: string | null }
 export type Release = { id: string; appId: string; state: 'Draft' | 'Published'; version?: string | null }
 export type ReleasePage = { items: Release[]; nextCursor: string | null }
+export type Page<T> = { items: T[]; nextCursor: string | null }
+export type Artifact = { id: string; kind: 'File' | 'Tree'; size?: number | null }
+export type Association = { id: string; releaseId: string; artifactId: string }
+export type Channel = { appId: string; name: string; releaseId: string }
+export type ChannelMove = { id: string; appId: string; name: string; releaseId: string; movedAt: string }
+export type Declaration = { revisionId: string; data: unknown }
+export type DeclarationRevision = { id: string; createdAt: string; data: unknown }
+export type DeclarationSnapshot = { releaseId: string; app: Declaration; release: Declaration; associations: { associationId: string; declaration: Declaration }[] }
+export type InventoryEntry = { type: 'File' | 'Directory'; path: string; fileId?: string | null; size?: number | null; sha256?: string | null; executable?: boolean | null; transferRequired?: boolean }
+export type UploadProgress = { ranges: { start: number; end: number }[]; nextCursor: string | null; progressVersion: number }
+export type Operation = { id: string; kind: string; status: 'Accepted' | 'Running' | 'Completed' | 'Failed'; accessRevoked?: boolean; physicalCleanup?: string; problem?: { title: string } }
 export type Diagnostics = { readiness: string; recovery: string; migration: string; storagePressure: string; activeUploads: number; activeTransfers: number; pendingCleanup: number; retryableCleanup: number; backupsRunning: number; backupsFailed: number }
-export type UploadSession = { id: string; file: { fileId: string }; phase: string }
-export type FinalizationResult = { phase: string; appId?: string; releaseId?: string; artifactId?: string; problem?: { title: string } }
+export type UploadSession = { id: string; operationId: string; file?: { fileId: string } | null; phase: string; inventoryComplete: boolean }
+export type FinalizationResult = { phase: string; appId?: string; releaseId?: string; artifactId?: string; associationId?: string; problem?: { title: string } }
 
 export class ApiError extends Error {
   constructor(public status: number, public code: string, title: string, public detail?: string) {
@@ -68,4 +79,15 @@ export async function apiRequest<T>(path: string, options: Options = {}): Promis
   }
   const value = response.status === 204 ? undefined as T : await response.json() as T
   return { value, response }
+}
+
+export async function resource<T>(path: string, signal?: AbortSignal): Promise<{ value: T; etag: string }> {
+  const result = await apiRequest<T>(path, { authenticated: true, signal })
+  const etag = result.response.headers.get('ETag')
+  if (!etag || etag.startsWith('W/')) throw new Error('The Server did not provide a strong version validator.')
+  return { value: result.value, etag }
+}
+
+export function jsonBody(value: unknown): Pick<Options, 'headers' | 'body'> {
+  return { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) }
 }

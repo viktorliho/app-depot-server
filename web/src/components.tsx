@@ -11,7 +11,7 @@ export function ActionLink({ to, children, secondary = false }: { to: string; ch
 }
 
 export function StatusBadge({ value }: { value: string }) {
-  const tone = value === 'Published' || value === 'Ready' || value === 'Public' || value === 'Normal' ? 'success'
+  const tone = value === 'Published' || value === 'Ready' || value === 'Public' || value === 'Normal' || value === 'Completed' ? 'success'
     : value === 'Failed' || value === 'NotReady' || value === 'Critical' ? 'danger' : value === 'Warning' ? 'warning' : 'neutral'
   return <span className={`status status-${tone}`}><span aria-hidden="true" className="status-dot" />{value}</span>
 }
