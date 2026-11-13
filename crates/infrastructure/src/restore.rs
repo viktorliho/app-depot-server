@@ -181,6 +181,7 @@ pub async fn restore(
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .open(parent.join(".app-depot-restore-lock"))?;
     parent_lock
         .try_lock_exclusive()

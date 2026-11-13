@@ -14,29 +14,25 @@ Use Rust 1.88.0, Node 26.5.0, and npm 11.17.0 as pinned by `rust-toolchain.toml`
 
 ```sh
 mkdir -p /tmp/app-depot-local
-umask 077
-openssl rand -hex 32 > /tmp/app-depot-local/dev-bootstrap
-openssl rand -hex 32 > /tmp/app-depot-local/dev-session-key
 cargo run -p app-depot-server -- init-dev --namespace /tmp/app-depot-local --instance dev
-cargo run -p app-depot-server -- seed-dev --namespace /tmp/app-depot-local --instance dev
 npm --prefix web ci
 ```
 
 Start the Server and Web development server in separate terminals:
 
 ```sh
-cargo run -p app-depot-server -- serve --namespace /tmp/app-depot-local --instance dev --mode dev --bind 127.0.0.1:8787 --bootstrap-secret-file /tmp/app-depot-local/dev-bootstrap --session-key-file /tmp/app-depot-local/dev-session-key
+cargo run -p app-depot-server -- serve --namespace /tmp/app-depot-local --instance dev --mode dev --bind 127.0.0.1:8787
 ```
 
 ```sh
 npm --prefix web run dev
 ```
 
-Open `http://127.0.0.1:5173/`. The bootstrap file contains the initial Admin password; protect it and remove it after account setup. Keep the session key across restarts. Dev and Preview run natively on macOS and Linux without a container runtime.
+Open `http://127.0.0.1:5173/`. Copy the `initial_setup` token from the Server terminal into the first-run form, then choose an Admin password. The data root retains the session key across restarts. Dev and Preview run natively on macOS and Linux without a container runtime.
 
 ## Deployment and verification
 
-The [deployment and operations contract](docs/deployment-operations.md) defines storage, bootstrap, non-root execution, reverse-proxy security, backup, restore, and recovery requirements. `Dockerfile`, `compose.yaml`, and `compose.bootstrap.yaml` provide OCI and Docker Compose packaging. Use the bootstrap overlay only for first initialization; ordinary restarts use `compose.yaml` with the same persistent volume and session key. Provision the data volume and protected secret files for the chosen non-root UID/GID before startup.
+The [deployment and operations contract](docs/deployment-operations.md) defines storage, first-run setup, non-root execution, reverse-proxy security, backup, restore and recovery. [TrueNAS installation and updates](docs/deployment-operations.md#truenas-scale-2510-installation-and-updates) use the published `linux/amd64` image and [Compose example](compose.yaml). No local build or external bootstrap secret is needed.
 
 Run `cargo test --workspace --locked` and `npm --prefix web run build` for the main local checks. Release acceptance remains pending for external deployment and durability gates; this project does not claim Production readiness.
 

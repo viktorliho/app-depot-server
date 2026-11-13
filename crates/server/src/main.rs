@@ -32,7 +32,7 @@ mod download;
 mod upload;
 
 fn usage() -> ! {
-    eprintln!("usage: app-depot-server <init-dev|init-preview|reset-dev|seed-dev|serve> --namespace ABSOLUTE_DIRECTORY --instance NAME [--mode dev|preview] [--bind ADDR] [--assets DIRECTORY] [--bootstrap-secret-file FILE] [--session-key-file FILE] [--upload-idle-seconds SECONDS]\n       app-depot-server serve --mode production [--config JSON_FILE] (APP_DEPOT_DATA_ROOT and secret sources required)\n       app-depot-server restore --backup-dir DIRECTORY --data-root ABSOLUTE_DIRECTORY [--replace]\n       app-depot-server diagnose --data-root ABSOLUTE_DIRECTORY");
+    eprintln!("usage: app-depot-server <init-dev|init-preview|reset-dev|seed-dev|serve> --namespace ABSOLUTE_DIRECTORY --instance NAME [--mode dev|preview] [--bind ADDR] [--assets DIRECTORY] [--upload-idle-seconds SECONDS]\n       app-depot-server serve --mode production [--config JSON_FILE] (APP_DEPOT_DATA_ROOT required)\n       app-depot-server restore --backup-dir DIRECTORY --data-root ABSOLUTE_DIRECTORY [--replace]\n       app-depot-server diagnose --data-root ABSOLUTE_DIRECTORY");
     std::process::exit(2)
 }
 
@@ -204,35 +204,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 lock_local(&namespace, &instance, mode)?
             };
             let pool = open_catalog(&lock).await?;
-            let auth_state = if let Some(config) = &production_config {
-                match &config.bootstrap_secret {
-                    Some(config::SecretSource::File(path)) => {
-                        app_depot_infrastructure::auth::bootstrap_admin(&pool, Some(path)).await?
-                    }
-                    Some(config::SecretSource::Environment(value)) => {
-                        app_depot_infrastructure::auth::bootstrap_admin_value(&pool, Some(value))
-                            .await?
-                    }
-                    None => {
-                        app_depot_infrastructure::auth::bootstrap_admin_value(&pool, None).await?
-                    }
-                }
-                match &config.session_key {
-                    config::SecretSource::File(path) => auth::AuthState::new(pool.clone(), path)?,
-                    config::SecretSource::Environment(value) => {
-                        auth::AuthState::from_key(pool.clone(), value.as_bytes().to_vec())?
-                    }
-                }
-            } else {
-                let bootstrap = argument(&args, "--bootstrap-secret-file").map(PathBuf::from);
-                app_depot_infrastructure::auth::bootstrap_admin(&pool, bootstrap.as_deref())
-                    .await?;
-                let session_key = PathBuf::from(
-                    argument(&args, "--session-key-file")
-                        .ok_or("--session-key-file is required")?,
-                );
-                auth::AuthState::new(pool.clone(), &session_key)?
-            };
+            let setup_token = app_depot_infrastructure::auth::prepare_setup(&pool).await?;
+            let auth_state = auth::AuthState::from_data_root(pool.clone(), &lock.path)?;
+            if let Some(token) = setup_token {
+                println!("{{\"event\":\"initial_setup\",\"token\":\"{token}\"}}");
+            }
             let coordinator = Arc::new(app_depot_application::upload::UploadCoordinator::new(
                 app_depot_infrastructure::upload::UploadAdapter::new(
                     pool.clone(),

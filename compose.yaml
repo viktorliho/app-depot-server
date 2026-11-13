@@ -1,20 +1,20 @@
 services:
   app-depot:
-    build: .
-    image: app-depot-server:local
+    image: ghcr.io/viktorliho/app-depot-server:latest
     user: "${APP_DEPOT_UID:-10001}:${APP_DEPOT_GID:-10001}"
     restart: unless-stopped
+    stop_grace_period: 60s
     ports:
-      - "${APP_DEPOT_LISTEN_ADDRESS:-127.0.0.1}:${APP_DEPOT_PORT:-8787}:8787"
+      - "${APP_DEPOT_PORT:-8787}:8787"
     environment:
       APP_DEPOT_DATA_ROOT: /data/production
       APP_DEPOT_ASSETS: /app/web
       APP_DEPOT_BIND: 0.0.0.0:8787
-      APP_DEPOT_SESSION_KEY_FILE: /run/secrets/session
-      APP_DEPOT_TRUSTED_PROXY_PEERS: "${APP_DEPOT_TRUSTED_PROXY_PEERS:-}"
     volumes:
-      - app_depot_data:/data
-      - "${APP_DEPOT_SESSION_KEY_FILE:?set APP_DEPOT_SESSION_KEY_FILE}:/run/secrets/session:ro"
-
-volumes:
-  app_depot_data:
+      - /mnt/POOL/app-depot:/data
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8787/api/v1/health/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s

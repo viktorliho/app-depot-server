@@ -1,0 +1,87 @@
+name: Publish release image
+on:
+  release:
+    types: [published]
+permissions:
+  contents: read
+concurrency:
+  group: app-depot-image-release
+  cancel-in-progress: false
+jobs:
+  checks:
+    if: ${{ !github.event.release.prerelease && !github.event.release.draft }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: web/.node-version
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm install -g npm@11.17.0
+      - run: rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - run: npm --prefix web ci
+      - run: npm --prefix web run build
+      - name: Validate OpenAPI
+        run: |
+          python3 -m venv "$RUNNER_TEMP/openapi"
+          "$RUNNER_TEMP/openapi/bin/pip" install openapi-spec-validator==0.7.2
+          "$RUNNER_TEMP/openapi/bin/python" -m openapi_spec_validator docs/openapi.yaml
+      - name: Verify release tag and ordering
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+          test "$(git tag -l "$RELEASE_TAG")" = "$RELEASE_TAG"
+          test "$(git tag -l | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)" = "$RELEASE_TAG"
+          test "$(git rev-parse HEAD)" = "$(git rev-list -n 1 "$RELEASE_TAG")"
+  publish:
+    needs: checks
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Refuse existing immutable tag
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if docker buildx imagetools inspect "ghcr.io/viktorliho/app-depot-server:$RELEASE_TAG" > /tmp/app-depot-tag-check 2>&1; then
+            echo "Version image already exists; refusing republish" >&2
+            exit 1
+          fi
+          grep -Eiq 'not found|manifest unknown|404' /tmp/app-depot-tag-check || { cat /tmp/app-depot-tag-check >&2; exit 1; }
+      - name: Publish versioned linux/amd64 image
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          REVISION="$(git rev-parse HEAD)"
+          docker buildx build --platform linux/amd64 --pull --push \
+            --tag "ghcr.io/viktorliho/app-depot-server:$RELEASE_TAG" \
+            --label "org.opencontainers.image.version=$RELEASE_TAG" \
+            --label "org.opencontainers.image.revision=$REVISION" \
+            --label "org.opencontainers.image.source=https://github.com/viktorliho/app-depot-server" .
+      - name: Move latest only after version publication
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          IMAGE="ghcr.io/viktorliho/app-depot-server"
+          DIGEST="$(docker buildx imagetools inspect "$IMAGE:$RELEASE_TAG" --format '{{.Manifest.Digest}}')"
+          test -n "$DIGEST"
+          docker buildx imagetools create --tag "$IMAGE:latest" "$IMAGE@$DIGEST"
+          echo "Published $IMAGE:$RELEASE_TAG and $IMAGE:latest at $DIGEST" >> "$GITHUB_STEP_SUMMARY"

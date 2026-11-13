@@ -10,7 +10,11 @@ use axum::{
 };
 use serde_json::json;
 use sqlx::Row;
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::HashMap,
+    path::{Path as FsPath, PathBuf},
+    sync::Arc,
+};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::io::ReaderStream;
 
@@ -205,7 +209,7 @@ async fn tree_file(
 }
 
 async fn serve_blob(
-    root: &PathBuf,
+    root: &FsPath,
     digest: &str,
     size: u64,
     headers: &HeaderMap,

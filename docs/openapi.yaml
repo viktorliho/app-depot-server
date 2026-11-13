@@ -429,6 +429,43 @@ paths:
       - {}
       - bearerAuth: []
       - cookieAuth: []
+  /setup:
+    get:
+      operationId: getInitialSetupStatus
+      tags: [Authentication]
+      summary: Report whether initial Admin setup is required
+      security: []
+      responses:
+        '200':
+          description: Setup status without a token or account details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SetupStatus'
+    post:
+      operationId: completeInitialSetup
+      tags: [Authentication]
+      summary: Create the first Admin with the startup-log setup token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InitialSetup'
+      responses:
+        '201':
+          description: First Admin created; setup token invalidated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SetupCreated'
+        '403':
+          description: Invalid token, forbidden origin, rate limit, or setup already completed
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
   /auth/sessions:
     post:
       operationId: createBrowserSession
@@ -446,7 +483,7 @@ paths:
             Set-Cookie:
               schema:
                 type: string
-              description: Secure HttpOnly SameSite session cookie.
+              description: HttpOnly SameSite=Lax session cookie; Secure when the effective origin is HTTPS.
         '400':
           description: RFC 9457 Problem Details. Hidden private resources use 404.
           content:
@@ -4511,8 +4548,39 @@ components:
       type: apiKey
       in: cookie
       name: ad_session
-      description: Web UI session. State-changing requests require X-CSRF-Token; Secure, HttpOnly, SameSite.
+      description: Web UI session. State-changing requests require X-CSRF-Token and Origin validation. HttpOnly and SameSite=Lax always; Secure on HTTPS.
   schemas:
+    SetupStatus:
+      type: object
+      properties:
+        required:
+          type: boolean
+      required: [required]
+      additionalProperties: false
+    InitialSetup:
+      type: object
+      properties:
+        token:
+          type: string
+          minLength: 64
+          maxLength: 64
+        username:
+          type: string
+          minLength: 1
+          maxLength: 255
+        password:
+          type: string
+          minLength: 16
+          maxLength: 1024
+      required: [token, username, password]
+      additionalProperties: false
+    SetupCreated:
+      type: object
+      properties:
+        created:
+          const: true
+      required: [created]
+      additionalProperties: false
     HealthLive:
       type: object
       properties:

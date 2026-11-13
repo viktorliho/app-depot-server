@@ -6,11 +6,9 @@ use argon2::{
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use sqlx::{Row, SqlitePool};
-use std::{
-    fs,
-    path::Path,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::time::{SystemTime, UNIX_EPOCH};
+#[cfg(test)]
+use std::{fs, path::Path};
 use uuid::Uuid;
 
 use crate::catalog::{etag, CatalogError};
@@ -248,6 +246,114 @@ pub fn random_secret() -> String {
     hex::encode(bytes)
 }
 
+/// Rotate the one-time challenge at each startup. Only its digest is durable.
+pub async fn prepare_setup(pool: &SqlitePool) -> Result<Option<String>, StorageError> {
+    let mut tx = pool.begin().await?;
+    let users: i64 = sqlx::query_scalar("SELECT count(*) FROM users")
+        .fetch_one(&mut *tx)
+        .await?;
+    let completed: Option<String> =
+        sqlx::query_scalar("SELECT value FROM instance_meta WHERE key='setup_complete'")
+            .fetch_optional(&mut *tx)
+            .await?;
+    if users != 0 || completed.is_some() {
+        if users != 0 {
+            sqlx::query("INSERT INTO instance_meta(key,value) VALUES('setup_complete','1') ON CONFLICT(key) DO NOTHING")
+                .execute(&mut *tx).await?;
+        }
+        sqlx::query("DELETE FROM instance_meta WHERE key IN ('setup_token_hash','setup_attempts')")
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        return Ok(None);
+    }
+    let token = random_secret();
+    let hash = hex::encode(Sha256::digest(token.as_bytes()));
+    sqlx::query("INSERT INTO instance_meta(key,value) VALUES('setup_token_hash',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+        .bind(hash).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO instance_meta(key,value) VALUES('setup_attempts','0') ON CONFLICT(key) DO UPDATE SET value='0'")
+        .execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(Some(token))
+}
+
+pub async fn setup_required(pool: &SqlitePool) -> Result<bool, StorageError> {
+    let users: i64 = sqlx::query_scalar("SELECT count(*) FROM users")
+        .fetch_one(pool)
+        .await?;
+    let completed: Option<String> =
+        sqlx::query_scalar("SELECT value FROM instance_meta WHERE key='setup_complete'")
+            .fetch_optional(pool)
+            .await?;
+    Ok(users == 0 && completed.is_none())
+}
+
+pub async fn complete_setup(
+    pool: &SqlitePool,
+    token: &str,
+    username: &str,
+    password: &str,
+) -> Result<bool, StorageError> {
+    if token.len() != 64
+        || username.is_empty()
+        || username.len() > 255
+        || password.len() < 16
+        || password.len() > 1024
+    {
+        return Ok(false);
+    }
+    let mut tx = pool.begin().await?;
+    let users: i64 = sqlx::query_scalar("SELECT count(*) FROM users")
+        .fetch_one(&mut *tx)
+        .await?;
+    let completed: Option<String> =
+        sqlx::query_scalar("SELECT value FROM instance_meta WHERE key='setup_complete'")
+            .fetch_optional(&mut *tx)
+            .await?;
+    if users != 0 || completed.is_some() {
+        return Ok(false);
+    }
+    let hash: Option<String> =
+        sqlx::query_scalar("SELECT value FROM instance_meta WHERE key='setup_token_hash'")
+            .fetch_optional(&mut *tx)
+            .await?;
+    let attempts: i64 = sqlx::query_scalar(
+        "SELECT CAST(value AS INTEGER) FROM instance_meta WHERE key='setup_attempts'",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if attempts >= 10 {
+        return Ok(false);
+    }
+    let supplied = Sha256::digest(token.as_bytes());
+    let expected = hash.as_deref().and_then(|value| hex::decode(value).ok());
+    if expected.as_deref() != Some(supplied.as_slice()) {
+        sqlx::query(
+            "UPDATE instance_meta SET value=CAST(value AS INTEGER)+1 WHERE key='setup_attempts'",
+        )
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        return Ok(false);
+    }
+    let salt = SaltString::generate(&mut OsRng);
+    let password_hash = Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .map_err(|_| StorageError::InvalidRoot("password verifier creation failed"))?
+        .to_string();
+    sqlx::query("INSERT INTO users(id, username, password_hash, server_admin, publish_permission) VALUES(?, ?, ?, 1, 1)")
+        .bind(Uuid::new_v4().to_string()).bind(username).bind(password_hash).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO instance_meta(key,value) VALUES('setup_complete','1')")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM instance_meta WHERE key IN ('setup_token_hash','setup_attempts')")
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(true)
+}
+
+#[cfg(test)]
 pub async fn bootstrap_admin(
     pool: &SqlitePool,
     secret_file: Option<&Path>,
@@ -281,6 +387,7 @@ pub async fn bootstrap_admin(
     bootstrap_admin_value(pool, Some(secret)).await
 }
 
+#[cfg(test)]
 pub async fn bootstrap_admin_value(
     pool: &SqlitePool,
     secret: Option<&str>,
@@ -345,9 +452,9 @@ pub async fn create_browser_session(
     sqlx::query(
         "INSERT INTO browser_sessions(id_hash, user_id, csrf_hash, expires_at) VALUES(?, ?, ?, ?)",
     )
-    .bind(hash_secret(&session))
+    .bind(hash_secret(session))
     .bind(user_id)
-    .bind(hash_secret(&csrf))
+    .bind(hash_secret(csrf))
     .bind(now() + 12 * 3600)
     .execute(pool)
     .await?;
@@ -447,6 +554,78 @@ pub async fn revoke_token(pool: &SqlitePool, user_id: &str) -> Result<(), Storag
 mod tests {
     use super::*;
     use crate::{init_local, lock_local, open_catalog, LocalMode};
+
+    #[tokio::test]
+    async fn initial_setup_rotates_and_only_one_concurrent_admin_wins() {
+        let dir = tempfile::tempdir().unwrap();
+        init_local(dir.path(), "setup", LocalMode::Dev).unwrap();
+        let lock = lock_local(dir.path(), "setup", LocalMode::Dev).unwrap();
+        let pool = open_catalog(&lock).await.unwrap();
+        let old = prepare_setup(&pool).await.unwrap().unwrap();
+        assert!(setup_required(&pool).await.unwrap());
+        let digest: String =
+            sqlx::query_scalar("SELECT value FROM instance_meta WHERE key='setup_token_hash'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_ne!(digest, old);
+        let new = prepare_setup(&pool).await.unwrap().unwrap();
+        assert_ne!(new, old);
+        assert!(
+            !complete_setup(&pool, &old, "admin", "safe secret phrase 12345")
+                .await
+                .unwrap()
+        );
+        let a = complete_setup(&pool, &new, "admin", "safe secret phrase 12345");
+        let b = complete_setup(&pool, &new, "other", "safe secret phrase 12345");
+        let (a, b) = tokio::join!(a, b);
+        assert_ne!(a.unwrap(), b.unwrap());
+        assert!(!setup_required(&pool).await.unwrap());
+        assert!(prepare_setup(&pool).await.unwrap().is_none());
+        assert!(
+            !complete_setup(&pool, &new, "extra", "safe secret phrase 12345")
+                .await
+                .unwrap()
+        );
+        let users: i64 = sqlx::query_scalar("SELECT count(*) FROM users")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(users, 1);
+        pool.close().await;
+        let reopened = open_catalog(&lock).await.unwrap();
+        assert!(!setup_required(&reopened).await.unwrap());
+        assert!(prepare_setup(&reopened).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn setup_attempt_limit_requires_restart_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        init_local(dir.path(), "attempts", LocalMode::Dev).unwrap();
+        let lock = lock_local(dir.path(), "attempts", LocalMode::Dev).unwrap();
+        let pool = open_catalog(&lock).await.unwrap();
+        let token = prepare_setup(&pool).await.unwrap().unwrap();
+        let wrong = "0".repeat(64);
+        for _ in 0..10 {
+            assert!(
+                !complete_setup(&pool, &wrong, "admin", "safe secret phrase 12345")
+                    .await
+                    .unwrap()
+            );
+        }
+        assert!(
+            !complete_setup(&pool, &token, "admin", "safe secret phrase 12345")
+                .await
+                .unwrap()
+        );
+        let rotated = prepare_setup(&pool).await.unwrap().unwrap();
+        assert_ne!(rotated, token);
+        assert!(
+            complete_setup(&pool, &rotated, "admin", "safe secret phrase 12345")
+                .await
+                .unwrap()
+        );
+    }
 
     #[tokio::test]
     async fn bootstrap_and_credentials_are_one_time_and_hashed() {

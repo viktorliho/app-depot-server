@@ -174,9 +174,7 @@ async fn receive(
         return Err(UploadError::Invalid.into());
     }
     let range = content_range(&headers, size)?;
-    let stream = body
-        .into_data_stream()
-        .map_err(|error| io::Error::new(io::ErrorKind::Other, error));
+    let stream = body.into_data_stream().map_err(io::Error::other);
     let mut reader = StreamReader::new(stream);
     state
         .coordinator

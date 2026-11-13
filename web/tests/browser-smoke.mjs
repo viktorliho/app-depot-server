@@ -1,17 +1,21 @@
 import { chromium } from 'playwright-core'
-import { readFile } from 'node:fs/promises'
 
 const browserPath = process.env.APP_DEPOT_BROWSER_BINARY ||
   (process.platform === 'darwin' ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : '/usr/bin/google-chrome')
-const secretFile = process.env.APP_DEPOT_BOOTSTRAP_SECRET_FILE
-if (!secretFile) throw new Error('APP_DEPOT_BOOTSTRAP_SECRET_FILE is required')
-const password = (await readFile(secretFile, 'utf8')).replace(/\n$/, '')
+const setupToken = process.env.APP_DEPOT_SETUP_TOKEN
+const password = process.env.APP_DEPOT_TEST_PASSWORD || 'browser smoke password 12345'
 const base = process.env.APP_DEPOT_BASE_URL || 'http://127.0.0.1:8787/'
 const browser = await chromium.launch({ executablePath: browserPath, headless: true })
 try {
   const page = await browser.newPage()
   await page.goto(base)
   await page.getByText('Server ready').waitFor()
+  if (setupToken) {
+    await page.getByLabel('Setup token').fill(setupToken)
+    await page.getByLabel('Password (at least 16 characters)').fill(password)
+    await page.getByRole('button', { name: 'Create Admin' }).click()
+    await page.getByText('Admin created. Sign in with your new password.').waitFor()
+  }
   await page.getByLabel('Username').fill('admin')
   await page.getByLabel('Password').fill(password)
   await page.getByRole('button', { name: 'Sign in' }).click()

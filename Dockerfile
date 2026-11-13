@@ -7,15 +7,15 @@ RUN npm install -g npm@11.17.0 && npm ci
 COPY web/ ./
 RUN npm run build
 
-FROM --platform=$TARGETPLATFORM rust:1.88-bookworm AS server-build
+FROM --platform=linux/amd64 rust:1.88-bookworm AS server-build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates/ ./crates/
 RUN cargo build --release --locked -p app-depot-server
 
-FROM --platform=$TARGETPLATFORM debian:bookworm-slim
+FROM --platform=linux/amd64 debian:bookworm-slim
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates libsqlite3-0 \
+    && apt-get install -y --no-install-recommends ca-certificates libsqlite3-0 curl \
     && rm -rf /var/lib/apt/lists/*
 ARG APP_DEPOT_UID=10001
 ARG APP_DEPOT_GID=10001

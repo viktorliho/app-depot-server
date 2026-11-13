@@ -60,7 +60,7 @@ Server deletion does not erase offline-client copies, previously downloaded file
 
 ## 9. Storage and deployment
 
-The single-node MVP uses SQLite for metadata and filesystem-backed CAS with SHA-256 verification. One OCI container runs API, Web UI and workers on official `linux/amd64` and `linux/arm64` targets. Docker Compose is the reference deployment; TrueNAS SCALE Custom App uses the same contract. One persistent data root, non-root operation, online backup and offline restore follow the [deployment and operations contract](deployment-operations.md). Specific deployment files are not defined here.
+The single-node MVP uses SQLite for metadata and filesystem-backed CAS with SHA-256 verification. One OCI container runs API, Web UI and workers on the official M8 `linux/amd64` target. Docker Compose is the reference deployment; TrueNAS SCALE Custom App uses the same contract. One persistent data root, non-root operation, online backup and offline restore follow the [deployment and operations contract](deployment-operations.md). Specific deployment files are not defined here.
 
 ## 10. Public API
 

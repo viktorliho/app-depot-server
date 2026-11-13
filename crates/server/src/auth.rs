@@ -16,7 +16,8 @@ use sha2::Sha256;
 use sqlx::SqlitePool;
 use std::{
     collections::{HashMap, HashSet},
-    fs,
+    fs::{self, File, OpenOptions},
+    io::Write,
     net::{IpAddr, SocketAddr},
     path::Path as FsPath,
     sync::Arc,
@@ -33,6 +34,29 @@ pub struct AuthState {
 }
 
 impl AuthState {
+    pub fn from_data_root(
+        pool: SqlitePool,
+        root: &FsPath,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let path = root.join("ops/session-key");
+        if !path.exists() {
+            let mut key = [0u8; 32];
+            use rand::RngCore;
+            rand::rngs::OsRng.fill_bytes(&mut key);
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let mut file = options.open(&path)?;
+            file.write_all(&key)?;
+            file.sync_all()?;
+            File::open(root.join("ops"))?.sync_all()?;
+        }
+        Self::new(pool, &path)
+    }
     pub fn new(pool: SqlitePool, key_file: &FsPath) -> Result<Self, Box<dyn std::error::Error>> {
         let meta = key_file.symlink_metadata()?;
         if !meta.is_file() || meta.file_type().is_symlink() {
@@ -357,17 +381,22 @@ fn effective_origin(
         }
     }
     let host = headers.get(header::HOST).and_then(|h| h.to_str().ok())?;
-    let local = host == "localhost"
-        || host.starts_with("localhost:")
-        || host == "127.0.0.1"
-        || host.starts_with("127.0.0.1:")
-        || host == "[::1]"
-        || host.starts_with("[::1]:");
-    if local {
-        // Published loopback ports reach containers through a non-loopback bridge peer.
-        return HeaderValue::from_str(&format!("http://{host}")).ok();
+    if host.is_empty()
+        || host.len() > 255
+        || !host
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b".-:[]".contains(&c))
+    {
+        return None;
     }
-    None
+    HeaderValue::from_str(&format!("http://{host}")).ok()
+}
+
+fn secure_cookie(headers: &HeaderMap) -> bool {
+    headers
+        .get("x-app-depot-effective-origin")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|origin| origin.starts_with("https://"))
 }
 
 #[derive(Deserialize)]
@@ -375,6 +404,38 @@ fn effective_origin(
 struct Login {
     username: String,
     password: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct InitialSetup {
+    token: String,
+    username: String,
+    password: String,
+}
+
+async fn setup_status(State(state): State<AuthState>) -> Result<Json<Value>, ApiError> {
+    let required = auth::setup_required(&state.pool)
+        .await
+        .map_err(|_| ApiError::server())?;
+    Ok(Json(json!({"required": required})))
+}
+
+async fn setup_admin(
+    State(state): State<AuthState>,
+    headers: HeaderMap,
+    Json(input): Json<InitialSetup>,
+) -> Result<Response, ApiError> {
+    if !local_origin(&headers) {
+        return Err(ApiError::forbidden());
+    }
+    let created = auth::complete_setup(&state.pool, &input.token, &input.username, &input.password)
+        .await
+        .map_err(|_| ApiError::server())?;
+    if !created {
+        return Err(ApiError::forbidden());
+    }
+    Ok((StatusCode::CREATED, Json(json!({"created": true}))).into_response())
 }
 
 #[derive(Deserialize)]
@@ -621,8 +682,13 @@ async fn login(
         .await
         .map_err(|_| ApiError::server())?;
     let cookie = format!(
-        "ad_session={}; Secure; HttpOnly; SameSite=Lax; Path=/; Max-Age=43200",
-        state.signed_cookie(&id)
+        "ad_session={}; {}HttpOnly; SameSite=Lax; Path=/; Max-Age=43200",
+        state.signed_cookie(&id),
+        if secure_cookie(&headers) {
+            "Secure; "
+        } else {
+            ""
+        }
     );
     let mut response =
         Json(json!({"user": User::from(principal), "csrfToken": csrf})).into_response();
@@ -660,7 +726,15 @@ async fn logout(State(state): State<AuthState>, headers: HeaderMap) -> Result<Re
     let mut response = StatusCode::NO_CONTENT.into_response();
     response.headers_mut().insert(
         header::SET_COOKIE,
-        HeaderValue::from_static("ad_session=; Secure; HttpOnly; SameSite=Lax; Path=/; Max-Age=0"),
+        HeaderValue::from_str(&format!(
+            "ad_session=; {}HttpOnly; SameSite=Lax; Path=/; Max-Age=0",
+            if secure_cookie(&headers) {
+                "Secure; "
+            } else {
+                ""
+            }
+        ))
+        .map_err(|_| ApiError::server())?,
     );
     Ok(response)
 }
@@ -773,6 +847,7 @@ pub async fn reader(state: &AuthState, headers: &HeaderMap) -> Result<Option<Pri
 
 pub fn router(state: AuthState) -> Router {
     Router::new()
+        .route("/setup", get(setup_status).post(setup_admin))
         .route("/auth/sessions", post(login))
         .route("/auth/sessions/current", get(current).delete(logout))
         .route(
@@ -816,7 +891,7 @@ mod origin_tests {
     }
 
     #[test]
-    fn remote_http_origin_still_requires_a_trusted_https_proxy() {
+    fn remote_http_origin_and_trusted_https_proxy() {
         let mut headers = HeaderMap::new();
         headers.insert(header::HOST, HeaderValue::from_static("depot.example"));
         headers.insert("x-forwarded-proto", HeaderValue::from_static("https"));
@@ -825,7 +900,10 @@ mod origin_tests {
             HeaderValue::from_static("depot.example"),
         );
         let peer = IpAddr::from([172, 18, 0, 1]);
-        assert!(effective_origin(&headers, peer, &HashSet::new()).is_none());
+        assert_eq!(
+            effective_origin(&headers, peer, &HashSet::new()).unwrap(),
+            "http://depot.example"
+        );
         let trusted = HashSet::from([peer]);
         assert_eq!(
             effective_origin(&headers, peer, &trusted).unwrap(),

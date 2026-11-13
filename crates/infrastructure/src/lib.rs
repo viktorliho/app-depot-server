@@ -121,6 +121,7 @@ pub fn init_local(namespace: &Path, name: &str, mode: LocalMode) -> Result<PathB
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .open(
             root.parent()
                 .ok_or(StorageError::InvalidRoot("invalid instance parent"))?
@@ -389,6 +390,7 @@ pub fn lock_local(namespace: &Path, name: &str, mode: LocalMode) -> Result<RootL
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .open(path)?;
     file.try_lock_exclusive()
         .map_err(|_| StorageError::Locked)?;

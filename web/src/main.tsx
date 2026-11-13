@@ -29,6 +29,8 @@ async function fileSha256(file: File): Promise<string> {
 function App() {
   const [health, setHealth] = useState('Checking server')
   const [session, setSession] = useState<BrowserSession | null>(null)
+  const [setupRequired, setSetupRequired] = useState(false)
+  const [setupToken, setSetupToken] = useState('')
   const [username, setUsername] = useState('admin')
   const [password, setPassword] = useState('')
   const [appName, setAppName] = useState('')
@@ -42,7 +44,18 @@ function App() {
       setHealth(response.ok && body.status === 'Ready' ? 'Server ready' : 'Server unavailable')
     }).catch(() => setHealth('Server unavailable'))
     request<BrowserSession>('/auth/sessions/current').then(({ value }) => setSession(value)).catch(() => {})
+    request<{ required: boolean }>('/setup').then(({ value }) => setSetupRequired(value.required)).catch(() => {})
   }, [])
+
+  async function setup(event: React.FormEvent) {
+    event.preventDefault(); setBusy(true); setMessage('')
+    try {
+      await request<{ created: boolean }>('/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: setupToken, username, password }) })
+      setSetupRequired(false); setSetupToken(''); setMessage('Admin created. Sign in with your new password.')
+    } catch (error) { setMessage((error as Error).message) }
+    finally { setBusy(false) }
+  }
 
   async function login(event: React.FormEvent) {
     event.preventDefault()
@@ -102,7 +115,12 @@ function App() {
 
   return <main>
     <header><h1>App Depot</h1><p role="status">{health}</p></header>
-    {!session ? <section><h2>Sign in</h2><form onSubmit={login}>
+    {setupRequired ? <section><h2>Initial Admin setup</h2><p>Find the setup token in the container startup logs.</p><form onSubmit={setup}>
+      <label>Setup token<input value={setupToken} onChange={event => setSetupToken(event.target.value)} required /></label>
+      <label>Username<input value={username} onChange={event => setUsername(event.target.value)} required /></label>
+      <label>Password (at least 16 characters)<input type="password" minLength={16} value={password} onChange={event => setPassword(event.target.value)} required /></label>
+      <button disabled={busy}>Create Admin</button>
+    </form></section> : !session ? <section><h2>Sign in</h2><form onSubmit={login}>
       <label>Username<input value={username} onChange={event => setUsername(event.target.value)} required /></label>
       <label>Password<input type="password" value={password} onChange={event => setPassword(event.target.value)} required /></label>
       <button disabled={busy}>Sign in</button>

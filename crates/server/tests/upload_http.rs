@@ -27,11 +27,23 @@ fn request_full(
 ) -> std::io::Result<(u16, Vec<u8>, String)> {
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(500))?;
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-    write!(stream, "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Length: {}\r\n", body.len())?;
+    let host = extra
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("Host"))
+        .map(|(_, value)| *value)
+        .unwrap_or("localhost");
+    write!(
+        stream,
+        "{method} {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nContent-Length: {}\r\n",
+        body.len()
+    )?;
     if !token.is_empty() {
         write!(stream, "Authorization: Bearer {token}\r\n")?;
     }
     for (name, value) in extra {
+        if name.eq_ignore_ascii_case("Host") {
+            continue;
+        }
         write!(stream, "{name}: {value}\r\n")?;
     }
     stream.write_all(b"\r\n")?;
@@ -76,10 +88,6 @@ fn start(root: &std::path::Path, addr: SocketAddr) -> Server {
             "dev",
             "--bind",
             &addr.to_string(),
-            "--bootstrap-secret-file",
-            root.join("bootstrap").to_str().unwrap(),
-            "--session-key-file",
-            root.join("session-key").to_str().unwrap(),
         ])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -105,7 +113,7 @@ fn start_production(
     root: &std::path::Path,
     addr: SocketAddr,
     trusted_peer: bool,
-    bootstrap: bool,
+    _bootstrap: bool,
 ) -> Server {
     let mut command = Command::new(env!("CARGO_BIN_EXE_app-depot-server"));
     command
@@ -119,17 +127,12 @@ fn start_production(
         .env("APP_DEPOT_DATA_ROOT", root.join("production"))
         .env("APP_DEPOT_ASSETS", root.join("assets"))
         .env("APP_DEPOT_BIND", addr.to_string())
-        .env("APP_DEPOT_SESSION_KEY_FILE", root.join("session-key"))
         .env(
             "APP_DEPOT_TRUSTED_PROXY_PEERS",
             if trusted_peer { "127.0.0.1" } else { "" },
         )
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    command.env_remove("APP_DEPOT_BOOTSTRAP_SECRET_FILE");
-    if bootstrap {
-        command.env("APP_DEPOT_BOOTSTRAP_SECRET_FILE", root.join("bootstrap"));
-    }
     let child = command.spawn().unwrap();
     let mut server = Server(child);
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -151,39 +154,76 @@ fn start_production(
 }
 
 #[test]
-fn compose_bootstrap_secret_is_first_start_only() {
-    let ordinary = include_str!("../../../compose.yaml");
-    let first_start = include_str!("../../../compose.bootstrap.yaml");
-    assert!(ordinary.contains("APP_DEPOT_SESSION_KEY_FILE"));
-    assert!(!ordinary.contains("APP_DEPOT_BOOTSTRAP_SECRET_FILE"));
-    assert!(first_start.contains("APP_DEPOT_BOOTSTRAP_SECRET_FILE: /run/secrets/bootstrap"));
-    assert!(first_start.contains(":/run/secrets/bootstrap:ro"));
+fn compose_uses_persistent_root_without_bootstrap_overlay() {
+    let compose = include_str!("../../../compose.yaml");
+    assert!(compose.contains("ghcr.io/viktorliho/app-depot-server:latest"));
+    assert!(compose.contains("/data/production"));
+    assert!(!compose.contains("APP_DEPOT_BOOTSTRAP_SECRET"));
+    assert!(!compose.contains("APP_DEPOT_SESSION_KEY_FILE"));
 }
 
 #[test]
-fn production_bootstrap_and_trusted_origin_on_real_server() {
+fn production_setup_and_transport_security_on_real_server() {
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir(dir.path().join("assets")).unwrap();
     fs::write(dir.path().join("assets/index.html"), "<h1>App Depot</h1>").unwrap();
-    fs::write(dir.path().join("config.json"), r#"{"data_root":"/invalid","bind":"127.0.0.1:1","assets":"/invalid","upload_idle_seconds":600}"#).unwrap();
-    fs::write(dir.path().join("bootstrap"), "safe secret phrase 12345").unwrap();
     fs::write(
-        dir.path().join("session-key"),
-        "session signing phrase long enough 12345",
+        dir.path().join("config.json"),
+        r#"{"data_root":"/invalid"}"#,
     )
     .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        for name in ["bootstrap", "session-key"] {
-            fs::set_permissions(dir.path().join(name), fs::Permissions::from_mode(0o600)).unwrap();
-        }
-    }
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     drop(listener);
+    let mut first = start_production(dir.path(), addr, false, false);
+    let (status, body) = request(addr, "GET", "/api/v1/setup", "", &[], &[]).unwrap();
+    assert_eq!(status, 200);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["required"],
+        true
+    );
+    let (status, _) = request(addr, "GET", "/api/v1/users", "", &[], &[]).unwrap();
+    assert_eq!(status, 401);
+    let old_token = first_setup_token(&mut first);
+    drop(first);
+    let mut first = start_production(dir.path(), addr, false, false);
+    let token = first_setup_token(&mut first);
+    assert_ne!(token, old_token);
+    let invalid = br#"{"token":"0000000000000000000000000000000000000000000000000000000000000000","username":"admin","password":"safe secret phrase 12345"}"#;
+    let origin = [
+        ("Content-Type", "application/json"),
+        ("Origin", "http://localhost"),
+    ];
+    let stale =
+        json!({"token": old_token, "username":"admin", "password":"safe secret phrase 12345"})
+            .to_string();
+    assert_eq!(
+        request(addr, "POST", "/api/v1/setup", "", &origin, stale.as_bytes())
+            .unwrap()
+            .0,
+        403
+    );
+    assert_eq!(
+        request(addr, "POST", "/api/v1/setup", "", &origin, invalid)
+            .unwrap()
+            .0,
+        403
+    );
+    let setup = json!({"token": token, "username":"admin", "password":"safe secret phrase 12345"})
+        .to_string();
+    assert_eq!(
+        request(addr, "POST", "/api/v1/setup", "", &origin, setup.as_bytes())
+            .unwrap()
+            .0,
+        201
+    );
+    assert_eq!(
+        request(addr, "POST", "/api/v1/setup", "", &origin, setup.as_bytes())
+            .unwrap()
+            .0,
+        403
+    );
     let login = br#"{"username":"admin","password":"safe secret phrase 12345"}"#;
-    let first = start_production(dir.path(), addr, false, true);
     let (status, _, head) = request_full(
         addr,
         "POST",
@@ -191,75 +231,83 @@ fn production_bootstrap_and_trusted_origin_on_real_server() {
         "",
         &[
             ("Content-Type", "application/json"),
+            ("Host", "depot.lan:8787"),
+            ("Origin", "http://depot.lan:8787"),
+        ],
+        login,
+    )
+    .unwrap();
+    assert_eq!(status, 200);
+    assert!(head.contains("HttpOnly; SameSite=Lax"));
+    assert!(!head.contains("Secure;"));
+    let (_, _, head) = request_full(
+        addr,
+        "POST",
+        "/api/v1/auth/sessions",
+        "",
+        &[
+            ("Content-Type", "application/json"),
             ("Origin", "http://localhost"),
+            ("X-Forwarded-Proto", "https"),
+            ("X-Forwarded-Host", "localhost"),
+        ],
+        login,
+    )
+    .unwrap();
+    assert!(!head.contains("Secure;"));
+    assert_eq!(
+        request(
+            addr,
+            "POST",
+            "/api/v1/auth/sessions",
+            "",
+            &[
+                ("Content-Type", "application/json"),
+                ("Origin", "https://depot.example"),
+                ("X-Forwarded-Proto", "https"),
+                ("X-Forwarded-Host", "depot.example")
+            ],
+            login
+        )
+        .unwrap()
+        .0,
+        403
+    );
+    let session_key = fs::read(dir.path().join("production/ops/session-key")).unwrap();
+    drop(first);
+    let mut second = start_production(dir.path(), addr, true, false);
+    assert_eq!(
+        fs::read(dir.path().join("production/ops/session-key")).unwrap(),
+        session_key
+    );
+    assert_eq!(
+        request(addr, "GET", "/api/v1/setup", "", &[], &[])
+            .unwrap()
+            .0,
+        200
+    );
+    let (status, _, head) = request_full(
+        addr,
+        "POST",
+        "/api/v1/auth/sessions",
+        "",
+        &[
+            ("Content-Type", "application/json"),
+            ("Origin", "https://depot.example"),
+            ("X-Forwarded-Proto", "https"),
+            ("X-Forwarded-Host", "depot.example"),
         ],
         login,
     )
     .unwrap();
     assert_eq!(status, 200);
     assert!(head.contains("Secure; HttpOnly; SameSite=Lax"));
-    let (status, _) = request(
-        addr,
-        "POST",
-        "/api/v1/auth/sessions",
-        "",
-        &[
-            ("Content-Type", "application/json"),
-            ("Origin", "https://depot.example"),
-            ("X-Forwarded-Proto", "https"),
-            ("X-Forwarded-Host", "depot.example"),
-        ],
-        login,
-    )
-    .unwrap();
-    assert_eq!(status, 403);
-    let (status, _) = request(
-        addr,
-        "POST",
-        "/api/v1/auth/sessions",
-        "",
-        &[
-            ("Content-Type", "application/json"),
-            ("Origin", "https://depot.example"),
-            ("X-App-Depot-Effective-Origin", "https://depot.example"),
-        ],
-        login,
-    )
-    .unwrap();
-    assert_eq!(status, 403);
-    drop(first);
-    fs::remove_file(dir.path().join("bootstrap")).unwrap();
-    let mut second = start_production(dir.path(), addr, true, false);
-    let (status, _) = request(
-        addr,
-        "POST",
-        "/api/v1/auth/sessions",
-        "",
-        &[
-            ("Content-Type", "application/json"),
-            ("Origin", "https://depot.example"),
-            ("X-Forwarded-Proto", "https"),
-            ("X-Forwarded-Host", "depot.example"),
-        ],
-        login,
-    )
-    .unwrap();
-    assert_eq!(status, 200);
-    let (status, _) = request(
-        addr,
-        "POST",
-        "/api/v1/auth/sessions",
-        "",
-        &[
-            ("Content-Type", "application/json"),
-            ("Origin", "https://depot.example"),
-            ("X-Forwarded-Proto", "https"),
-            ("X-Forwarded-Host", "evil.example,depot.example"),
-        ],
-        login,
-    )
-    .unwrap();
-    assert_eq!(status, 403);
+    assert_eq!(
+        request(addr, "POST", "/api/v1/setup", "", &origin, setup.as_bytes())
+            .unwrap()
+            .0,
+        403
+    );
     assert!(Command::new("kill")
         .args(["-TERM", &second.0.id().to_string()])
         .status()
@@ -268,11 +316,27 @@ fn production_bootstrap_and_trusted_origin_on_real_server() {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         if let Some(exit) = second.0.try_wait().unwrap() {
-            assert!(exit.success(), "SIGTERM shutdown failed");
+            assert!(exit.success());
             break;
         }
-        assert!(Instant::now() < deadline, "SIGTERM shutdown timed out");
+        assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn first_setup_token(server: &mut Server) -> String {
+    let mut logs = String::new();
+    let reader = server.0.stdout.as_mut().unwrap();
+    use std::io::BufRead;
+    let mut buffered = std::io::BufReader::new(reader);
+    loop {
+        logs.clear();
+        buffered.read_line(&mut logs).unwrap();
+        if let Ok(event) = serde_json::from_str::<Value>(&logs) {
+            if event["event"] == "initial_setup" {
+                return event["token"].as_str().unwrap().into();
+            }
+        }
     }
 }
 
@@ -295,9 +359,12 @@ async fn acknowledged_range_survives_real_process_kill() {
             fs::set_permissions(dir.path().join(name), fs::Permissions::from_mode(0o600)).unwrap();
         }
     }
-    auth::bootstrap_admin(&pool, Some(&dir.path().join("bootstrap")))
-        .await
-        .unwrap();
+    let setup_token = auth::prepare_setup(&pool).await.unwrap().unwrap();
+    assert!(
+        auth::complete_setup(&pool, &setup_token, "admin", "safe secret phrase 12345")
+            .await
+            .unwrap()
+    );
     let user = auth::verify_password(&pool, "admin", "safe secret phrase 12345")
         .await
         .unwrap()
