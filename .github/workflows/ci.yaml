@@ -24,6 +24,7 @@ jobs:
       - run: cargo test --workspace --locked
       - run: npm --prefix web ci
       - run: npm --prefix web run build
+      - run: npm --prefix web run smoke:lan-http
       - name: Validate OpenAPI
         run: |
           python3 -m venv "$RUNNER_TEMP/openapi"

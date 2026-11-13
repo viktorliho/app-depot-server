@@ -8,6 +8,14 @@ type BrowserSession = { user: { username: string }, csrfToken: string }
 type UploadSession = { id: string, file: { fileId: string }, phase: string }
 type FinalizationResult = { phase: string, releaseId?: string, artifactId?: string, problem?: { title: string } }
 
+function idempotencyKey(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = bytesToHex(bytes)
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<{ value: T, response: Response }> {
   const response = await fetch(`/api/v1${path}`, { credentials: 'same-origin', ...options })
   if (!response.ok) {
@@ -74,7 +82,7 @@ function App() {
     const headers = { 'X-CSRF-Token': csrf }
     const digest = await fileSha256(file)
     const created = await request<UploadSession>('/uploads', {
-      method: 'POST', headers: { ...headers, 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+      method: 'POST', headers: { ...headers, 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey() },
       body: JSON.stringify({ mode: 'BareFile', target: { newAppName: name }, file: { size: file.size, sha256: digest } })
     })
     const upload = created.value
@@ -90,13 +98,13 @@ function App() {
       setMessage(`Received ${end.toLocaleString()} of ${file.size.toLocaleString()} bytes`)
     }
     const { value: result } = await request<FinalizationResult>(`/uploads/${upload.id}/finalize`, {
-      method: 'POST', headers: { ...headers, 'Idempotency-Key': crypto.randomUUID() }
+      method: 'POST', headers: { ...headers, 'Idempotency-Key': idempotencyKey() }
     })
     if (result.phase !== 'Completed' || !result.releaseId) throw new Error(result.problem?.title || 'Finalization did not complete')
     if (publishNow) {
       const release = await request<unknown>(`/releases/${result.releaseId}`)
       await request<unknown>(`/releases/${result.releaseId}/publish`, {
-        method: 'POST', headers: { ...headers, 'Idempotency-Key': crypto.randomUUID(), 'If-Match': release.response.headers.get('ETag') || '' }
+        method: 'POST', headers: { ...headers, 'Idempotency-Key': idempotencyKey(), 'If-Match': release.response.headers.get('ETag') || '' }
       })
       setMessage(`Published ${name}`)
     } else setMessage(`Saved ${name} as Draft`)
