@@ -1,144 +1,25 @@
-import React, { useEffect, useState } from 'react'
+import React from 'react'
 import { createRoot } from 'react-dom/client'
-import { sha256 } from '@noble/hashes/sha256'
-import { bytesToHex } from '@noble/hashes/utils'
+import { BrowserRouter, Route, Routes } from 'react-router'
+import { AuthPage, AuthProvider, AppWorkspace, NotFound, RequireAuth, ServerWorkspace, ThemeProvider } from './portal'
+import { ApplicationOverview, ApplicationReleases, ApplicationsPage, CreateApplicationPage, ServerOverview,
+  UnavailablePage, UploadExistingAppPage, UploadNewAppPage } from './pages'
 import './style.css'
 
-type BrowserSession = { user: { username: string }, csrfToken: string }
-type UploadSession = { id: string, file: { fileId: string }, phase: string }
-type FinalizationResult = { phase: string, releaseId?: string, artifactId?: string, problem?: { title: string } }
-
-function idempotencyKey(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(16))
-  bytes[6] = (bytes[6] & 0x0f) | 0x40
-  bytes[8] = (bytes[8] & 0x3f) | 0x80
-  const hex = bytesToHex(bytes)
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
-}
-
-async function request<T>(path: string, options: RequestInit = {}): Promise<{ value: T, response: Response }> {
-  const response = await fetch(`/api/v1${path}`, { credentials: 'same-origin', ...options })
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({})) as { title?: string }
-    throw new Error(body.title || `Request failed (${response.status})`)
-  }
-  return { value: await response.json() as T, response }
-}
-
-async function fileSha256(file: File): Promise<string> {
-  const hash = sha256.create()
-  const chunk = 4 * 1024 * 1024
-  for (let offset = 0; offset < file.size; offset += chunk) {
-    hash.update(new Uint8Array(await file.slice(offset, offset + chunk).arrayBuffer()))
-  }
-  return bytesToHex(hash.digest())
-}
-
-function App() {
-  const [health, setHealth] = useState('Checking server')
-  const [session, setSession] = useState<BrowserSession | null>(null)
-  const [setupRequired, setSetupRequired] = useState(false)
-  const [setupToken, setSetupToken] = useState('')
-  const [username, setUsername] = useState('admin')
-  const [password, setPassword] = useState('')
-  const [appName, setAppName] = useState('')
-  const [file, setFile] = useState<File | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [message, setMessage] = useState('')
-
-  useEffect(() => {
-    fetch('/api/v1/health/ready').then(async response => {
-      const body = await response.json() as { status: string }
-      setHealth(response.ok && body.status === 'Ready' ? 'Server ready' : 'Server unavailable')
-    }).catch(() => setHealth('Server unavailable'))
-    request<BrowserSession>('/auth/sessions/current').then(({ value }) => setSession(value)).catch(() => {})
-    request<{ required: boolean }>('/setup').then(({ value }) => setSetupRequired(value.required)).catch(() => {})
-  }, [])
-
-  async function setup(event: React.FormEvent) {
-    event.preventDefault(); setBusy(true); setMessage('')
-    try {
-      await request<{ created: boolean }>('/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: setupToken, username, password }) })
-      setSetupRequired(false); setSetupToken(''); setMessage('Admin created. Sign in with your new password.')
-    } catch (error) { setMessage((error as Error).message) }
-    finally { setBusy(false) }
-  }
-
-  async function login(event: React.FormEvent) {
-    event.preventDefault()
-    setBusy(true); setMessage('')
-    try {
-      const { value } = await request<BrowserSession>('/auth/sessions', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password })
-      })
-      setSession(value); setPassword('')
-    } catch (error) { setMessage((error as Error).message) }
-    finally { setBusy(false) }
-  }
-
-  async function publish(file: File, name: string, csrf: string, publishNow: boolean) {
-    const headers = { 'X-CSRF-Token': csrf }
-    const digest = await fileSha256(file)
-    const created = await request<UploadSession>('/uploads', {
-      method: 'POST', headers: { ...headers, 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey() },
-      body: JSON.stringify({ mode: 'BareFile', target: { newAppName: name }, file: { size: file.size, sha256: digest } })
-    })
-    const upload = created.value
-    const chunk = 4 * 1024 * 1024
-    for (let start = 0; start < file.size; start += chunk) {
-      const end = Math.min(start + chunk, file.size)
-      const response = await fetch(`/api/v1/uploads/${upload.id}/files/${upload.file.fileId}`, {
-        method: 'PUT', credentials: 'same-origin',
-        headers: { ...headers, 'Content-Type': 'application/octet-stream', 'Content-Range': `bytes ${start}-${end - 1}/${file.size}` },
-        body: file.slice(start, end)
-      })
-      if (!response.ok) throw new Error(`Upload failed (${response.status})`)
-      setMessage(`Received ${end.toLocaleString()} of ${file.size.toLocaleString()} bytes`)
-    }
-    const { value: result } = await request<FinalizationResult>(`/uploads/${upload.id}/finalize`, {
-      method: 'POST', headers: { ...headers, 'Idempotency-Key': idempotencyKey() }
-    })
-    if (result.phase !== 'Completed' || !result.releaseId) throw new Error(result.problem?.title || 'Finalization did not complete')
-    if (publishNow) {
-      const release = await request<unknown>(`/releases/${result.releaseId}`)
-      await request<unknown>(`/releases/${result.releaseId}/publish`, {
-        method: 'POST', headers: { ...headers, 'Idempotency-Key': idempotencyKey(), 'If-Match': release.response.headers.get('ETag') || '' }
-      })
-      setMessage(`Published ${name}`)
-    } else setMessage(`Saved ${name} as Draft`)
-  }
-
-  async function submit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (!file || !session || !appName.trim()) return
-    const button = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null
-    const publishNow = button?.value === 'publish'
-    setBusy(true); setMessage('Hashing file')
-    try { await publish(file, appName.trim(), session.csrfToken, publishNow) }
-    catch (error) { setMessage((error as Error).message) }
-    finally { setBusy(false) }
-  }
-
-  return <main>
-    <header><h1>App Depot</h1><p role="status">{health}</p></header>
-    {setupRequired ? <section><h2>Initial Admin setup</h2><p>Find the setup token in the container startup logs.</p><form onSubmit={setup}>
-      <label>Setup token<input value={setupToken} onChange={event => setSetupToken(event.target.value)} required /></label>
-      <label>Username<input value={username} onChange={event => setUsername(event.target.value)} required /></label>
-      <label>Password (at least 16 characters)<input type="password" minLength={16} value={password} onChange={event => setPassword(event.target.value)} required /></label>
-      <button disabled={busy}>Create Admin</button>
-    </form></section> : !session ? <section><h2>Sign in</h2><form onSubmit={login}>
-      <label>Username<input value={username} onChange={event => setUsername(event.target.value)} required /></label>
-      <label>Password<input type="password" value={password} onChange={event => setPassword(event.target.value)} required /></label>
-      <button disabled={busy}>Sign in</button>
-    </form></section> : <section><p>Signed in as {session.user.username}</p><h2>New App</h2><form onSubmit={submit}>
-      <label>App name<input value={appName} onChange={event => setAppName(event.target.value)} required /></label>
-      <label>File<input type="file" onChange={event => setFile(event.target.files?.[0] || null)} required /></label>
-      <div className="actions"><button value="draft" disabled={busy || !file}>Save Draft</button><button value="publish" disabled={busy || !file}>Upload and publish</button></div>
-    </form></section>}
-    {message && <p role="alert">{message}</p>}
-  </main>
-}
-
-createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>)
+createRoot(document.getElementById('root')!).render(<React.StrictMode><BrowserRouter><ThemeProvider><AuthProvider><Routes>
+  <Route path="/login" element={<AuthPage setup={false} />} />
+  <Route path="/setup" element={<AuthPage setup />} />
+  <Route element={<RequireAuth><ServerWorkspace /></RequireAuth>}>
+    <Route index element={<ServerOverview />} />
+    <Route path="/apps" element={<ApplicationsPage />} />
+    <Route path="/apps/new" element={<CreateApplicationPage />} />
+    <Route path="/upload/new-app" element={<UploadNewAppPage />} />
+  </Route>
+  <Route path="/apps/:appId" element={<RequireAuth><AppWorkspace /></RequireAuth>}>
+    <Route index element={<ApplicationOverview />} />
+    <Route path="releases" element={<ApplicationReleases />} />
+    <Route path="uploads/new" element={<UploadExistingAppPage />} />
+    <Route path="*" element={<UnavailablePage />} />
+  </Route>
+  <Route path="*" element={<RequireAuth><NotFound /></RequireAuth>} />
+</Routes></AuthProvider></ThemeProvider></BrowserRouter></React.StrictMode>)

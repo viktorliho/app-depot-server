@@ -43,6 +43,7 @@ Run `cargo test --workspace --locked` and `npm --prefix web run build` for the m
 - [Reliable upload and commit](docs/upload-commit.md)
 - [API v1](docs/api.md) and [OpenAPI 3.1](docs/openapi.yaml)
 - [Deployment and operations](docs/deployment-operations.md)
+- [Portal UX architecture](docs/portal-ux.md)
 
 ## License
 
