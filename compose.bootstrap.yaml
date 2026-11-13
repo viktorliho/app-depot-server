@@ -1,0 +1,6 @@
+services:
+  app-depot:
+    environment:
+      APP_DEPOT_BOOTSTRAP_SECRET_FILE: /run/secrets/bootstrap
+    volumes:
+      - "${APP_DEPOT_BOOTSTRAP_SECRET_FILE:?set APP_DEPOT_BOOTSTRAP_SECRET_FILE}:/run/secrets/bootstrap:ro"

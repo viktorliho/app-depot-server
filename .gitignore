@@ -1,0 +1,7 @@
+/target/
+/web/node_modules/
+/web/dist/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.DS_Store

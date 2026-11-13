@@ -1,0 +1,26 @@
+[package]
+name = "app-depot-infrastructure"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+app-depot-application = { path = "../application" }
+app-depot-domain = { path = "../domain" }
+sqlx.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+fs2 = "0.4"
+libc = "0.2"
+sha2 = "0.10"
+argon2 = "0.5"
+rand = "0.8"
+uuid = { version = "=1.16.0", features = ["v4"] }
+hex = "0.4"
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
+crc32fast = "1.5"
+
+[dev-dependencies]
+tempfile = "3"

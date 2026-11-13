@@ -1,0 +1,15 @@
+:root { font-family: system-ui, sans-serif; color: #17212b; background: #f4f6f8; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { max-width: 680px; margin: 0 auto; padding: 3rem 1.25rem; }
+header { margin-bottom: 2rem; }
+h1 { margin: 0 0 .5rem; font-size: 2rem; }
+section { background: white; border: 1px solid #dbe1e7; border-radius: .7rem; padding: 1.5rem; }
+h2 { margin-top: 0; }
+form, label { display: grid; gap: .6rem; }
+form { gap: 1rem; }
+input { width: 100%; padding: .7rem; border: 1px solid #b9c3ce; border-radius: .4rem; font: inherit; }
+button { padding: .7rem 1rem; border: 0; border-radius: .4rem; background: #145fa3; color: white; font: inherit; cursor: pointer; }
+button:disabled { opacity: .5; cursor: default; }
+.actions { display: flex; flex-wrap: wrap; gap: .6rem; }
+[role="alert"] { margin-top: 1.25rem; padding: 1rem; background: #eaf2fa; border-radius: .4rem; }

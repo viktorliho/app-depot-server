@@ -1,0 +1,6199 @@
+openapi: 3.1.0
+info:
+  title: App Depot Server API
+  version: 1.0.0
+  description: 'Normative HTTP API v1. Semantics: api.md. No operation implies publication except
+    explicit publish.'
+servers:
+- url: /api/v1
+security:
+- bearerAuth: []
+- cookieAuth: []
+paths:
+  /health/live:
+    get:
+      operationId: getLiveness
+      tags:
+      - Operations
+      summary: Minimal process liveness without private data
+      responses:
+        '200':
+          description: Responsive process
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthLive'
+      security:
+      - {}
+      - bearerAuth: []
+      - cookieAuth: []
+  /health/ready:
+    get:
+      operationId: getReadiness
+      tags:
+      - Operations
+      summary: Mandatory recovery and storage readiness
+      responses:
+        '200':
+          description: Safe to serve requests
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthReady'
+        '503':
+          description: Not ready; no private details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthUnavailable'
+      security:
+      - {}
+      - bearerAuth: []
+      - cookieAuth: []
+  /backups:
+    post:
+      operationId: startBackup
+      tags:
+      - Operations
+      summary: Start Server Admin online backup; no request body
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description: Bound to Admin principal and backup operation; exact retry returns the same operation.
+      - name: X-CSRF-Token
+        in: header
+        schema:
+          type: string
+        description: Required for cookie-authenticated state changes.
+      responses:
+        '202':
+          description: Backup operation or exact idempotent replay; status may be terminal and output availability is separate.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+          headers:
+            Cache-Control:
+              description: Sensitive response must not be stored.
+              schema:
+                type: string
+                const: no-store
+            Location:
+              description: Operation resource URL.
+              schema:
+                type: string
+                pattern: ^/api/v1/operations/[0-9a-f-]+$
+        '400':
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '503':
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '507':
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+    get:
+      operationId: listBackups
+      tags:
+      - Operations
+      summary: List completed managed backups for Server Admin
+      parameters:
+      - name: pageSize
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          default: 100
+      - name: cursor
+        in: query
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Only Completed backups with independently verified available output.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BackupPage'
+          headers:
+            Cache-Control:
+              description: Sensitive response must not be stored.
+              schema:
+                type: string
+                const: no-store
+        '400':
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '503':
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+  /backups/{backup_id}:
+    get:
+      operationId: getBackupManifest
+      tags:
+      - Operations
+      summary: Read completed portable backup manifest as Server Admin
+      parameters:
+      - name: backup_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Versioned portable manifest
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BackupManifest'
+          headers:
+            Cache-Control:
+              description: Sensitive response must not be stored.
+              schema:
+                type: string
+                const: no-store
+        '401':
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: Unknown or unavailable backup output; RFC 9457 not_found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '503':
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+  /backups/{backup_id}/entries/{entry_id}:
+    get:
+      operationId: getBackupEntry
+      tags:
+      - Operations
+      summary: Download immutable backup member by opaque ID as Server Admin
+      parameters:
+      - name: backup_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: entry_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Range
+        in: header
+        schema:
+          type: string
+        description: RFC 9110 single byte range; multiple ranges may be ignored with 200.
+      - name: If-Range
+        in: header
+        schema:
+          type: string
+        description: Strong ETag; mismatch returns full 200.
+      responses:
+        '200':
+          description: Complete immutable member
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+          headers:
+            Cache-Control:
+              description: Sensitive response must not be stored.
+              schema:
+                type: string
+                const: no-store
+            ETag:
+              description: Strong validator of immutable member bytes.
+              schema:
+                type: string
+            Accept-Ranges:
+              description: Supported byte ranges.
+              schema:
+                type: string
+                const: bytes
+        '206':
+          description: Single byte range
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+          headers:
+            Cache-Control:
+              description: Sensitive response must not be stored.
+              schema:
+                type: string
+                const: no-store
+            ETag:
+              description: Strong validator of immutable member bytes.
+              schema:
+                type: string
+            Accept-Ranges:
+              description: Supported byte ranges.
+              schema:
+                type: string
+                const: bytes
+            Content-Range:
+              description: Returned inclusive byte range and total size.
+              schema:
+                type: string
+        '401':
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: Unknown or unavailable backup output; RFC 9457 not_found.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '416':
+          description: RFC 9457 range_not_satisfiable Problem Details for an unsatisfiable byte range.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+          headers:
+            Cache-Control:
+              description: Sensitive response must not be stored.
+              schema:
+                type: string
+                const: no-store
+            Content-Range:
+              description: 'Unsatisfied RFC 9110 range: bytes */complete-length.'
+              required: true
+              schema:
+                type: string
+                pattern: ^bytes \*/[0-9]+$
+        '503':
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+  /admin/diagnostics:
+    get:
+      operationId: getAdminDiagnostics
+      tags:
+      - Operations
+      summary: Redacted operational diagnostics for Server Admin
+      responses:
+        '200':
+          description: Aggregates only; no secrets or private content
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminDiagnostics'
+          headers:
+            Cache-Control:
+              description: Sensitive response must not be stored.
+              schema:
+                type: string
+                const: no-store
+        '401':
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '503':
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+  /capabilities:
+    get:
+      operationId: getCapabilities
+      tags:
+      - Capabilities
+      summary: Actual supported protocol capabilities
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Capabilities'
+        '500':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - {}
+      - bearerAuth: []
+      - cookieAuth: []
+  /auth/sessions:
+    post:
+      operationId: createBrowserSession
+      tags:
+      - Authentication
+      summary: Create Web UI session
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BrowserSession'
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+              description: Secure HttpOnly SameSite session cookie.
+        '400':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Login'
+      security: []
+  /auth/sessions/current:
+    get:
+      operationId: getBrowserSession
+      tags:
+      - Authentication
+      summary: Read current browser session and CSRF token
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BrowserSession'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - cookieAuth: []
+    delete:
+      operationId: logoutBrowserSession
+      tags:
+      - Authentication
+      summary: Invalidate browser session
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        schema:
+          type: string
+        description: Required for cookie-authenticated state-changing requests; not required for Bearer.
+      responses:
+        '204':
+          description: '204'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - cookieAuth: []
+  /me/token:
+    get:
+      operationId: getMyTokenMetadata
+      tags:
+      - Users
+      summary: Read personal token metadata, never secret
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenMetadata'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+    put:
+      operationId: replaceMyToken
+      tags:
+      - Users
+      summary: Issue or replace one personal token; reveal secret once
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        schema:
+          type: string
+        description: Required for cookie-authenticated state-changing requests; not required for Bearer.
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenIssue'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+    delete:
+      operationId: revokeMyToken
+      tags:
+      - Users
+      summary: Revoke personal token
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        schema:
+          type: string
+        description: Required for cookie-authenticated state-changing requests; not required for Bearer.
+      responses:
+        '204':
+          description: '204'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+  /users:
+    get:
+      operationId: listUsers
+      tags:
+      - Users
+      summary: 'Admin: list users'
+      parameters:
+      - name: pageSize
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        description: Default 100; actual maximum in capabilities.
+      - name: cursor
+        in: query
+        schema:
+          type: string
+        description: Opaque cursor; invalid/expired returns 400.
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPage'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '400':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+    post:
+      operationId: createUser
+      tags:
+      - Users
+      summary: 'Admin: create local user'
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description: Principal, action, target and immutable input bound; conflicting reuse returns 409.
+      - name: X-CSRF-Token
+        in: header
+        schema:
+          type: string
+        description: Required for cookie-authenticated state-changing requests; not required for Bearer.
+      responses:
+        '201':
+          description: '201'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+          headers:
+            Location:
+              description: Resource URL.
+              schema:
+                type: string
+        '400':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserCreate'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+  /users/{user_id}:
+    get:
+      operationId: getUser
+      tags:
+      - Users
+      summary: 'Admin: read user'
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+          headers:
+            ETag:
+              description: Strong validator.
+              schema:
+                type: string
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+    patch:
+      operationId: updateUser
+      tags:
+      - Users
+      summary: 'Admin: set Publish permission or Admin flag'
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: If-Match
+        in: header
+        required: true
+        schema:
+          type: string
+        description: Strong ETag of the mutable resource; stale returns 412.
+      - name: X-CSRF-Token
+        in: header
+        schema:
+          type: string
+        description: Required for cookie-authenticated state-changing requests; not required for Bearer.
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+          headers:
+            ETag:
+              description: Strong validator.
+              schema:
+                type: string
+        '400':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '412':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '428':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserPatch'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+  /users/{user_id}/token:
+    delete:
+      operationId: revokeUserToken
+      tags:
+      - Users
+      summary: 'Admin: revoke a user personal token without revealing it'
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-CSRF-Token
+        in: header
+        schema:
+          type: string
+        description: Required for cookie-authenticated state-changing requests; not required for Bearer.
+      responses:
+        '204':
+          description: '204'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+  /settings:
+    get:
+      operationId: getSettings
+      tags:
+      - Settings
+      summary: 'Admin: read server settings'
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServerSettings'
+          headers:
+            ETag:
+              description: Strong validator.
+              schema:
+                type: string
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+    patch:
+      operationId: updateSettings
+      tags:
+      - Settings
+      summary: 'Admin: update server settings'
+      parameters:
+      - name: If-Match
+        in: header
+        required: true
+        schema:
+          type: string
+        description: Strong ETag of the mutable resource; stale returns 412.
+      - name: X-CSRF-Token
+        in: header
+        schema:
+          type: string
+        description: Required for cookie-authenticated state-changing requests; not required for Bearer.
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServerSettings'
+          headers:
+            ETag:
+              description: Strong validator.
+              schema:
+                type: string
+        '400':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '412':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '428':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SettingsPatch'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+  /apps:
+    get:
+      operationId: listApps
+      tags:
+      - Catalog
+      summary: List visible Apps only
+      parameters:
+      - name: pageSize
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        description: Default 100; actual maximum in capabilities.
+      - name: cursor
+        in: query
+        schema:
+          type: string
+        description: Opaque cursor; invalid/expired returns 400.
+      - name: q
+        in: query
+        schema:
+          type: string
+        description: Search only within authorized catalog scope.
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppPage'
+        '400':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - {}
+      - bearerAuth: []
+      - cookieAuth: []
+    post:
+      operationId: createApp
+      tags:
+      - Catalog
+      summary: Create Draft App; Publish permission required
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description: Principal, action, target and immutable input bound; conflicting reuse returns 409.
+      - name: X-CSRF-Token
+        in: header
+        schema:
+          type: string
+        description: Required for cookie-authenticated state-changing requests; not required for Bearer.
+      responses:
+        '201':
+          description: '201'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/App'
+          headers:
+            ETag:
+              description: Strong validator.
+              schema:
+                type: string
+            Location:
+              description: Resource URL.
+              schema:
+                type: string
+        '400':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppCreate'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+  /apps/{app_id}:
+    get:
+      operationId: getApp
+      tags:
+      - Catalog
+      summary: Read visible App
+      parameters:
+      - name: app_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/App'
+          headers:
+            ETag:
+              description: Strong validator.
+              schema:
+                type: string
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - {}
+      - bearerAuth: []
+      - cookieAuth: []
+    patch:
+      operationId: updateApp
+      tags:
+      - Catalog
+      summary: 'Owner/Admin: update App metadata or visibility'
+      parameters:
+      - name: app_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: If-Match
+        in: header
+        required: true
+        schema:
+          type: string
+        description: Strong ETag of the mutable resource; stale returns 412.
+      - name: X-CSRF-Token
+        in: header
+        schema:
+          type: string
+        description: Required for cookie-authenticated state-changing requests; not required for Bearer.
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/App'
+          headers:
+            ETag:
+              description: Strong validator.
+              schema:
+                type: string
+        '400':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '412':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '428':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppPatch'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+    delete:
+      operationId: deleteApp
+      tags:
+      - Catalog
+      summary: Begin permanent App deletion
+      parameters:
+      - name: app_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: If-Match
+        in: header
+        required: true
+        schema:
+          type: string
+        description: Strong ETag of the mutable resource; stale returns 412.
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description: Principal, action, target and immutable input bound; conflicting reuse returns 409.
+      - name: X-CSRF-Token
+        in: header
+        schema:
+          type: string
+        description: Required for cookie-authenticated state-changing requests; not required for Bearer.
+      responses:
+        '202':
+          description: Accepted only after access revocation is committed atomically with the deletion operation; accessRevoked is true and physical cleanup may be pending.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+          headers:
+            Location:
+              description: Resource URL.
+              schema:
+                type: string
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '412':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '428':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+  /apps/{app_id}/releases:
+    get:
+      operationId: listReleases
+      tags:
+      - Catalog
+      summary: List visible Releases
+      parameters:
+      - name: app_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: pageSize
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        description: Default 100; actual maximum in capabilities.
+      - name: cursor
+        in: query
+        schema:
+          type: string
+        description: Opaque cursor; invalid/expired returns 400.
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReleasePage'
+        '400':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - {}
+      - bearerAuth: []
+      - cookieAuth: []
+    post:
+      operationId: createRelease
+      tags:
+      - Catalog
+      summary: 'Owner/Admin: create Draft Release'
+      parameters:
+      - name: app_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description: Principal, action, target and immutable input bound; conflicting reuse returns 409.
+      - name: X-CSRF-Token
+        in: header
+        schema:
+          type: string
+        description: Required for cookie-authenticated state-changing requests; not required for Bearer.
+      responses:
+        '201':
+          description: '201'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Release'
+          headers:
+            ETag:
+              description: Strong validator.
+              schema:
+                type: string
+            Location:
+              description: Resource URL.
+              schema:
+                type: string
+        '400':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReleaseCreate'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+  /releases/{release_id}:
+    get:
+      operationId: getRelease
+      tags:
+      - Catalog
+      summary: Read visible Release
+      parameters:
+      - name: release_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Release'
+          headers:
+            ETag:
+              description: Strong validator.
+              schema:
+                type: string
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - {}
+      - bearerAuth: []
+      - cookieAuth: []
+    patch:
+      operationId: updateRelease
+      tags:
+      - Catalog
+      summary: 'Owner/Admin: update visible version'
+      parameters:
+      - name: release_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: If-Match
+        in: header
+        required: true
+        schema:
+          type: string
+        description: Strong ETag of the mutable resource; stale returns 412.
+      - name: X-CSRF-Token
+        in: header
+        schema:
+          type: string
+        description: Required for cookie-authenticated state-changing requests; not required for Bearer.
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Release'
+          headers:
+            ETag:
+              description: Strong validator.
+              schema:
+                type: string
+        '400':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '412':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '428':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReleasePatch'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+    delete:
+      operationId: deleteRelease
+      tags:
+      - Catalog
+      summary: Begin permanent Release deletion
+      parameters:
+      - name: release_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: If-Match
+        in: header
+        required: true
+        schema:
+          type: string
+        description: Strong ETag of the mutable resource; stale returns 412.
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description: Principal, action, target and immutable input bound; conflicting reuse returns 409.
+      - name: X-CSRF-Token
+        in: header
+        schema:
+          type: string
+        description: Required for cookie-authenticated state-changing requests; not required for Bearer.
+      responses:
+        '202':
+          description: Accepted only after access revocation is committed atomically with the deletion operation; accessRevoked is true and physical cleanup may be pending.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+          headers:
+            Location:
+              description: Resource URL.
+              schema:
+                type: string
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '412':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '428':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+  /releases/{release_id}/publish:
+    post:
+      operationId: publishRelease
+      tags:
+      - Catalog
+      summary: Explicitly publish complete Draft Release
+      parameters:
+      - name: release_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: If-Match
+        in: header
+        required: true
+        schema:
+          type: string
+        description: Strong ETag of the mutable resource; stale returns 412.
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description: Principal, action, target and immutable input bound; conflicting reuse returns 409.
+      - name: X-CSRF-Token
+        in: header
+        schema:
+          type: string
+        description: Required for cookie-authenticated state-changing requests; not required for Bearer.
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Release'
+          headers:
+            ETag:
+              description: Strong validator.
+              schema:
+                type: string
+        '400':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '412':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '428':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+  /apps/{app_id}/channels:
+    get:
+      operationId: listChannels
+      tags:
+      - Channels
+      summary: List visible channels
+      parameters:
+      - name: app_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: pageSize
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        description: Default 100; actual maximum in capabilities.
+      - name: cursor
+        in: query
+        schema:
+          type: string
+        description: Opaque cursor; invalid/expired returns 400.
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChannelPage'
+        '400':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - {}
+      - bearerAuth: []
+      - cookieAuth: []
+  /apps/{app_id}/channels/{name}:
+    get:
+      operationId: getChannel
+      tags:
+      - Channels
+      summary: Read a visible channel
+      parameters:
+      - name: app_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          pattern: ^[^/]+$
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Channel'
+          headers:
+            ETag:
+              description: Strong validator.
+              schema:
+                type: string
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - {}
+      - bearerAuth: []
+      - cookieAuth: []
+    put:
+      operationId: putChannel
+      tags:
+      - Channels
+      summary: 'Owner/Admin: create with If-None-Match * or move with If-Match'
+      parameters:
+      - name: app_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          pattern: ^[^/]+$
+      - name: X-CSRF-Token
+        in: header
+        schema:
+          type: string
+        description: Required for cookie-authenticated state-changing requests; not required for Bearer.
+      - name: If-Match
+        in: header
+        required: false
+        schema:
+          type: string
+        description: Strong ETag of the mutable resource; stale returns 412.
+      - name: If-None-Match
+        in: header
+        required: false
+        schema:
+          const: '*'
+        description: Required to create a channel only if absent.
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Channel'
+          headers:
+            ETag:
+              description: Strong validator.
+              schema:
+                type: string
+        '201':
+          description: '201'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Channel'
+          headers:
+            ETag:
+              description: Strong validator.
+              schema:
+                type: string
+            Location:
+              description: Resource URL.
+              schema:
+                type: string
+        '400':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '412':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '428':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChannelPut'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+      description: 'Create: require If-None-Match: * and return 201. Move: require strong If-Match and return 200.
+        Exactly one conditional header is required.'
+    delete:
+      operationId: deleteChannel
+      tags:
+      - Channels
+      summary: 'Owner/Admin: delete channel'
+      parameters:
+      - name: app_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          pattern: ^[^/]+$
+      - name: If-Match
+        in: header
+        required: true
+        schema:
+          type: string
+        description: Strong ETag of the mutable resource; stale returns 412.
+      - name: X-CSRF-Token
+        in: header
+        schema:
+          type: string
+        description: Required for cookie-authenticated state-changing requests; not required for Bearer.
+      responses:
+        '204':
+          description: '204'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '412':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '428':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+  /apps/{app_id}/channels/{name}/history:
+    get:
+      operationId: listChannelHistory
+      tags:
+      - Channels
+      summary: 'Owner/Admin: read movement history'
+      parameters:
+      - name: app_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          pattern: ^[^/]+$
+      - name: pageSize
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        description: Default 100; actual maximum in capabilities.
+      - name: cursor
+        in: query
+        schema:
+          type: string
+        description: Opaque cursor; invalid/expired returns 400.
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChannelMovePage'
+        '400':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+  /artifacts/{artifact_id}:
+    get:
+      operationId: getArtifact
+      tags:
+      - Artifacts
+      summary: Read Artifact through accessible association
+      parameters:
+      - name: artifact_id
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/ArtifactId'
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Artifact'
+          headers:
+            ETag:
+              description: Strong validator.
+              schema:
+                type: string
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - {}
+      - bearerAuth: []
+      - cookieAuth: []
+  /releases/{release_id}/artifacts:
+    get:
+      operationId: listAssociations
+      tags:
+      - Artifacts
+      summary: List Release Artifact associations
+      parameters:
+      - name: release_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: pageSize
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        description: Default 100; actual maximum in capabilities.
+      - name: cursor
+        in: query
+        schema:
+          type: string
+        description: Opaque cursor; invalid/expired returns 400.
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssociationPage'
+        '400':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - {}
+      - bearerAuth: []
+      - cookieAuth: []
+    post:
+      operationId: createAssociation
+      tags:
+      - Artifacts
+      summary: 'Owner/Admin: add existing authorized Artifact to Draft Release'
+      parameters:
+      - name: release_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description: Principal, action, target and immutable input bound; conflicting reuse returns 409.
+      - name: X-CSRF-Token
+        in: header
+        schema:
+          type: string
+        description: Required for cookie-authenticated state-changing requests; not required for Bearer.
+      responses:
+        '201':
+          description: '201'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Association'
+          headers:
+            Location:
+              description: Resource URL.
+              schema:
+                type: string
+        '400':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssociationCreate'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+  /associations/{association_id}:
+    get:
+      operationId: getAssociation
+      tags:
+      - Artifacts
+      summary: Read visible association
+      parameters:
+      - name: association_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Association'
+          headers:
+            ETag:
+              description: Strong validator.
+              schema:
+                type: string
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - {}
+      - bearerAuth: []
+      - cookieAuth: []
+    delete:
+      operationId: deleteAssociation
+      tags:
+      - Artifacts
+      summary: 'Owner/Admin: remove association from Draft Release'
+      parameters:
+      - name: association_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: If-Match
+        in: header
+        required: true
+        schema:
+          type: string
+        description: Strong ETag of the mutable resource; stale returns 412.
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description: Principal, action, target and immutable input bound; conflicting reuse returns 409.
+      - name: X-CSRF-Token
+        in: header
+        schema:
+          type: string
+        description: Required for cookie-authenticated state-changing requests; not required for Bearer.
+      responses:
+        '202':
+          description: '202'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+          headers:
+            Location:
+              description: Resource URL.
+              schema:
+                type: string
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '412':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '428':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+  /apps/{app_id}/declarations:
+    get:
+      operationId: getAppDeclarations
+      tags:
+      - Declarations
+      summary: Read current App declarations
+      parameters:
+      - name: app_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeclarationDocument'
+          headers:
+            ETag:
+              description: Strong validator.
+              schema:
+                type: string
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - {}
+      - bearerAuth: []
+      - cookieAuth: []
+    put:
+      operationId: replaceAppDeclarations
+      tags:
+      - Declarations
+      summary: Replace full App declaration document; creates revision
+      parameters:
+      - name: app_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: If-Match
+        in: header
+        required: true
+        schema:
+          type: string
+        description: Strong ETag of the mutable resource; stale returns 412.
+      - name: X-CSRF-Token
+        in: header
+        schema:
+          type: string
+        description: Required for cookie-authenticated state-changing requests; not required for Bearer.
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeclarationDocument'
+          headers:
+            ETag:
+              description: Strong validator.
+              schema:
+                type: string
+        '400':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '412':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '428':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeclarationPut'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+  /apps/{app_id}/declarations/revisions:
+    get:
+      operationId: listAppDeclarationRevisions
+      tags:
+      - Declarations
+      summary: List App declaration revisions
+      parameters:
+      - name: app_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: pageSize
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        description: Default 100; actual maximum in capabilities.
+      - name: cursor
+        in: query
+        schema:
+          type: string
+        description: Opaque cursor; invalid/expired returns 400.
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RevisionPage'
+        '400':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - {}
+      - bearerAuth: []
+      - cookieAuth: []
+  /apps/{app_id}/declarations/revisions/{revision_id}:
+    get:
+      operationId: getAppDeclarationRevision
+      tags:
+      - Declarations
+      summary: Read historical App declaration revision
+      parameters:
+      - name: app_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: revision_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeclarationRevision'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - {}
+      - bearerAuth: []
+      - cookieAuth: []
+  /releases/{release_id}/declarations:
+    get:
+      operationId: getReleaseDeclarations
+      tags:
+      - Declarations
+      summary: Read current Release declarations
+      parameters:
+      - name: release_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeclarationDocument'
+          headers:
+            ETag:
+              description: Strong validator.
+              schema:
+                type: string
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - {}
+      - bearerAuth: []
+      - cookieAuth: []
+    put:
+      operationId: replaceReleaseDeclarations
+      tags:
+      - Declarations
+      summary: Replace full Release declaration document; creates revision
+      parameters:
+      - name: release_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: If-Match
+        in: header
+        required: true
+        schema:
+          type: string
+        description: Strong ETag of the mutable resource; stale returns 412.
+      - name: X-CSRF-Token
+        in: header
+        schema:
+          type: string
+        description: Required for cookie-authenticated state-changing requests; not required for Bearer.
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeclarationDocument'
+          headers:
+            ETag:
+              description: Strong validator.
+              schema:
+                type: string
+        '400':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '412':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '428':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeclarationPut'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+  /releases/{release_id}/declarations/revisions:
+    get:
+      operationId: listReleaseDeclarationRevisions
+      tags:
+      - Declarations
+      summary: List Release declaration revisions
+      parameters:
+      - name: release_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: pageSize
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        description: Default 100; actual maximum in capabilities.
+      - name: cursor
+        in: query
+        schema:
+          type: string
+        description: Opaque cursor; invalid/expired returns 400.
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RevisionPage'
+        '400':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - {}
+      - bearerAuth: []
+      - cookieAuth: []
+  /releases/{release_id}/declarations/revisions/{revision_id}:
+    get:
+      operationId: getReleaseDeclarationRevision
+      tags:
+      - Declarations
+      summary: Read historical Release declaration revision
+      parameters:
+      - name: release_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: revision_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeclarationRevision'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - {}
+      - bearerAuth: []
+      - cookieAuth: []
+  /associations/{association_id}/declarations:
+    get:
+      operationId: getAssociationDeclarations
+      tags:
+      - Declarations
+      summary: Read current Association declarations
+      parameters:
+      - name: association_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeclarationDocument'
+          headers:
+            ETag:
+              description: Strong validator.
+              schema:
+                type: string
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - {}
+      - bearerAuth: []
+      - cookieAuth: []
+    put:
+      operationId: replaceAssociationDeclarations
+      tags:
+      - Declarations
+      summary: Replace full Association declaration document; creates revision
+      parameters:
+      - name: association_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: If-Match
+        in: header
+        required: true
+        schema:
+          type: string
+        description: Strong ETag of the mutable resource; stale returns 412.
+      - name: X-CSRF-Token
+        in: header
+        schema:
+          type: string
+        description: Required for cookie-authenticated state-changing requests; not required for Bearer.
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeclarationDocument'
+          headers:
+            ETag:
+              description: Strong validator.
+              schema:
+                type: string
+        '400':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '412':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '428':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeclarationPut'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+  /associations/{association_id}/declarations/revisions:
+    get:
+      operationId: listAssociationDeclarationRevisions
+      tags:
+      - Declarations
+      summary: List Association declaration revisions
+      parameters:
+      - name: association_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: pageSize
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        description: Default 100; actual maximum in capabilities.
+      - name: cursor
+        in: query
+        schema:
+          type: string
+        description: Opaque cursor; invalid/expired returns 400.
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RevisionPage'
+        '400':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - {}
+      - bearerAuth: []
+      - cookieAuth: []
+  /associations/{association_id}/declarations/revisions/{revision_id}:
+    get:
+      operationId: getAssociationDeclarationRevision
+      tags:
+      - Declarations
+      summary: Read historical Association declaration revision
+      parameters:
+      - name: association_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: revision_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeclarationRevision'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - {}
+      - bearerAuth: []
+      - cookieAuth: []
+  /releases/{release_id}/declaration-snapshot:
+    get:
+      operationId: getDeclarationSnapshot
+      tags:
+      - Declarations
+      summary: Read one consistent App/Release/association declaration snapshot
+      parameters:
+      - name: release_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeclarationSnapshot'
+          headers:
+            ETag:
+              description: Strong validator.
+              schema:
+                type: string
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - {}
+      - bearerAuth: []
+      - cookieAuth: []
+  /uploads:
+    post:
+      operationId: createUpload
+      tags:
+      - Uploads
+      summary: Create authorized unified upload session
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description: Principal, action, target and immutable input bound; conflicting reuse returns 409.
+      - name: X-CSRF-Token
+        in: header
+        schema:
+          type: string
+        description: Required for cookie-authenticated state-changing requests; not required for Bearer.
+      responses:
+        '201':
+          description: Created session or exact replay of the same historical session, including RestoreInvalidated cancellation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadSession'
+          headers:
+            Location:
+              description: Resource URL.
+              schema:
+                type: string
+        '400':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '413':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '507':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UploadCreate'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+  /uploads/{session_id}:
+    get:
+      operationId: getUpload
+      tags:
+      - Uploads
+      summary: Read phase, target and authoritative session summary
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Authorized session summary; restored incomplete sessions are Cancelled with cancellationReason RestoreInvalidated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadSession'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '410':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+    delete:
+      operationId: cancelUpload
+      tags:
+      - Uploads
+      summary: Cancel before registration; committed result wins race
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description: Principal, action, target and immutable input bound; conflicting reuse returns 409.
+      - name: X-CSRF-Token
+        in: header
+        schema:
+          type: string
+        description: Required for cookie-authenticated state-changing requests; not required for Bearer.
+      responses:
+        '202':
+          description: '202'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+          headers:
+            Location:
+              description: Resource URL.
+              schema:
+                type: string
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FinalizationResult'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '410':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+  /uploads/{session_id}/inventory:
+    get:
+      operationId: getUploadInventory
+      tags:
+      - Uploads
+      summary: Page through accepted upload inventory
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: pageSize
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        description: Default 100; actual maximum in capabilities.
+      - name: cursor
+        in: query
+        schema:
+          type: string
+        description: Opaque cursor; invalid/expired returns 400.
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadInventoryPage'
+        '400':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '410':
+          description: Cancelled session; restored incomplete sessions use session_cancelled with cancellationReason RestoreInvalidated.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+    post:
+      operationId: appendUploadInventory
+      tags:
+      - Uploads
+      summary: Append validated inventory batch in Receiving
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description: Principal, action, target and immutable input bound; conflicting reuse returns 409.
+      - name: X-CSRF-Token
+        in: header
+        schema:
+          type: string
+        description: Required for cookie-authenticated state-changing requests; not required for Bearer.
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InventoryBatchResult'
+        '400':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '410':
+          description: Cancelled session; restored incomplete sessions use session_cancelled with cancellationReason RestoreInvalidated.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '413':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InventoryBatch'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+  /uploads/{session_id}/inventory/complete:
+    post:
+      operationId: completeUploadInventory
+      tags:
+      - Uploads
+      summary: Freeze bare-tree inventory before file transfer
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description: Principal, action, target and immutable input bound; conflicting reuse returns 409.
+      - name: X-CSRF-Token
+        in: header
+        schema:
+          type: string
+        description: Required for cookie-authenticated state-changing requests; not required for Bearer.
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadSession'
+        '400':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '410':
+          description: Cancelled session; restored incomplete sessions use session_cancelled with cancellationReason RestoreInvalidated.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+  /uploads/{session_id}/files/{file_id}:
+    put:
+      operationId: putUploadRange
+      tags:
+      - Uploads
+      summary: App Depot partial PUT; Content-Range bytes start-end/total inclusive
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: file_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Content-Range
+        in: header
+        required: true
+        schema:
+          type: string
+          pattern: ^bytes [0-9]+-[0-9]+/[0-9]+$
+        description: App Depot partial PUT extension; inclusive start-end and exact body length.
+      - name: X-CSRF-Token
+        in: header
+        schema:
+          type: string
+        description: Required for cookie-authenticated state-changing requests; not required for Bearer.
+      responses:
+        '204':
+          description: Range acknowledged after staged write and progress record.
+        '400':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '410':
+          description: Cancelled session; restored incomplete sessions use session_cancelled with cancellationReason RestoreInvalidated.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '413':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '507':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+  /uploads/{session_id}/files/{file_id}/progress:
+    get:
+      operationId: getUploadProgress
+      tags:
+      - Uploads
+      summary: Authoritative sorted half-open range map
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: file_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: pageSize
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        description: Default 100; actual maximum in capabilities.
+      - name: cursor
+        in: query
+        schema:
+          type: string
+        description: Opaque cursor; invalid/expired returns 400.
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadProgress'
+        '400':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '410':
+          description: Cancelled session; restored incomplete sessions use session_cancelled with cancellationReason RestoreInvalidated.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+  /uploads/{session_id}/finalize:
+    post:
+      operationId: finalizeUpload
+      tags:
+      - Uploads
+      summary: Explicit, idempotent verification and durable registration
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description: Principal, action, target and immutable input bound; conflicting reuse returns 409.
+      - name: X-CSRF-Token
+        in: header
+        schema:
+          type: string
+        description: Required for cookie-authenticated state-changing requests; not required for Bearer.
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FinalizationResult'
+        '202':
+          description: '202'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+          headers:
+            Location:
+              description: Resource URL.
+              schema:
+                type: string
+        '400':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '410':
+          description: Cancelled session; restored incomplete sessions use session_cancelled with cancellationReason RestoreInvalidated.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '507':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+  /uploads/{session_id}/result:
+    get:
+      operationId: getUploadResult
+      tags:
+      - Uploads
+      summary: Retrieve terminal result or running operation
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Terminal result; restored incomplete sessions are Cancelled with cancellationReason RestoreInvalidated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FinalizationResult'
+        '202':
+          description: '202'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '410':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+  /operations/{operation_id}:
+    get:
+      operationId: getOperation
+      tags:
+      - Operations
+      summary: Read authorized long-running operation and cleanup status
+      parameters:
+      - name: operation_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Authorized operation; Backup includes backupOutputAvailable independently of historical status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+  /artifacts/{artifact_id}/content:
+    get:
+      operationId: getArtifactContent
+      tags:
+      - Downloads
+      summary: Authorized immutable file bytes with RFC 9110 Range and If-Range
+      parameters:
+      - name: artifact_id
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/ArtifactId'
+      - name: Range
+        in: header
+        schema:
+          type: string
+        description: RFC 9110 bytes range for downloads.
+      - name: If-Range
+        in: header
+        schema:
+          type: string
+        description: Strong validator; mismatch returns full 200 representation.
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+          headers:
+            ETag:
+              description: Strong validator.
+              schema:
+                type: string
+            Accept-Ranges:
+              schema:
+                const: bytes
+            Content-Length:
+              schema:
+                type: integer
+                minimum: 0
+        '206':
+          description: '206'
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+          headers:
+            ETag:
+              description: Strong validator.
+              schema:
+                type: string
+            Accept-Ranges:
+              schema:
+                const: bytes
+            Content-Length:
+              schema:
+                type: integer
+                minimum: 0
+            Content-Range:
+              schema:
+                type: string
+              description: RFC 9110 bytes start-end/total.
+        '416':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+          headers:
+            Content-Range:
+              schema:
+                type: string
+                pattern: ^bytes \*/[0-9]+$
+              description: 'Unsatisfied RFC 9110 range: bytes */total.'
+        '400':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - {}
+      - bearerAuth: []
+      - cookieAuth: []
+  /artifacts/{artifact_id}/files/{file_id}:
+    get:
+      operationId: getArtifactFile
+      tags:
+      - Downloads
+      summary: Authorized immutable file bytes with RFC 9110 Range and If-Range
+      parameters:
+      - name: artifact_id
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/ArtifactId'
+      - name: file_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Range
+        in: header
+        schema:
+          type: string
+        description: RFC 9110 bytes range for downloads.
+      - name: If-Range
+        in: header
+        schema:
+          type: string
+        description: Strong validator; mismatch returns full 200 representation.
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+          headers:
+            ETag:
+              description: Strong validator.
+              schema:
+                type: string
+            Accept-Ranges:
+              schema:
+                const: bytes
+            Content-Length:
+              schema:
+                type: integer
+                minimum: 0
+        '206':
+          description: '206'
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+          headers:
+            ETag:
+              description: Strong validator.
+              schema:
+                type: string
+            Accept-Ranges:
+              schema:
+                const: bytes
+            Content-Length:
+              schema:
+                type: integer
+                minimum: 0
+            Content-Range:
+              schema:
+                type: string
+              description: RFC 9110 bytes start-end/total.
+        '416':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+          headers:
+            Content-Range:
+              schema:
+                type: string
+                pattern: ^bytes \*/[0-9]+$
+              description: 'Unsatisfied RFC 9110 range: bytes */total.'
+        '400':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - {}
+      - bearerAuth: []
+      - cookieAuth: []
+  /artifacts/{artifact_id}/inventory:
+    get:
+      operationId: getArtifactInventory
+      tags:
+      - Downloads
+      summary: Page through immutable canonical tree inventory
+      parameters:
+      - name: artifact_id
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/ArtifactId'
+      - name: pageSize
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        description: Default 100; actual maximum in capabilities.
+      - name: cursor
+        in: query
+        schema:
+          type: string
+        description: Opaque cursor; invalid/expired returns 400.
+      responses:
+        '200':
+          description: '200'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InventoryPage'
+          headers:
+            ETag:
+              description: Strong validator.
+              schema:
+                type: string
+        '400':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - {}
+      - bearerAuth: []
+      - cookieAuth: []
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: One revocable personal API token per user.
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: ad_session
+      description: Web UI session. State-changing requests require X-CSRF-Token; Secure, HttpOnly, SameSite.
+  schemas:
+    HealthLive:
+      type: object
+      properties:
+        status:
+          const: Live
+      required:
+      - status
+      additionalProperties: false
+    HealthReady:
+      type: object
+      properties:
+        status:
+          const: Ready
+      required:
+      - status
+      additionalProperties: false
+    HealthUnavailable:
+      type: object
+      properties:
+        status:
+          const: NotReady
+      required:
+      - status
+      additionalProperties: false
+    BackupSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        formatVersion:
+          type: integer
+          const: 1
+        capturedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        memberCount:
+          type: integer
+          minimum: 1
+        totalBytes:
+          type: integer
+          minimum: 0
+      required:
+      - id
+      - formatVersion
+      - capturedAt
+      - completedAt
+      - memberCount
+      - totalBytes
+      additionalProperties: false
+    BackupPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/BackupSummary'
+        nextCursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+      required:
+      - items
+      - nextCursor
+      additionalProperties: false
+    BackupMember:
+      type: object
+      properties:
+        entryId:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum:
+          - SqliteSnapshot
+          - CasObject
+        relativePath:
+          type: string
+          pattern: ^(catalog\.sqlite|cas/[0-9a-f]{64})$
+          description: Portable path relative to backup root; validated against traversal and collisions.
+        size:
+          type: integer
+          minimum: 0
+        sha256:
+          type: string
+          pattern: ^[0-9a-f]{64}$
+      required:
+      - entryId
+      - kind
+      - relativePath
+      - size
+      - sha256
+      additionalProperties: false
+      if:
+        properties:
+          kind:
+            const: SqliteSnapshot
+        required:
+        - kind
+      then:
+        properties:
+          relativePath:
+            const: catalog.sqlite
+      else:
+        properties:
+          relativePath:
+            pattern: ^cas/[0-9a-f]{64}$
+    BackupManifest:
+      type: object
+      properties:
+        formatVersion:
+          type: integer
+          const: 1
+        backupId:
+          type: string
+          format: uuid
+        capturedAt:
+          type: string
+          format: date-time
+        catalogFormatVersion:
+          type: integer
+          minimum: 1
+        members:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/BackupMember'
+          contains:
+            properties:
+              kind:
+                const: SqliteSnapshot
+            required:
+            - kind
+          minContains: 1
+          maxContains: 1
+      required:
+      - formatVersion
+      - backupId
+      - capturedAt
+      - catalogFormatVersion
+      - members
+      additionalProperties: false
+      description: Same logical manifest as portable manifest.json; metadata and recovery obligations are in the SQLite snapshot.
+    AdminDiagnostics:
+      type: object
+      properties:
+        readiness:
+          type: string
+          enum:
+          - Ready
+          - NotReady
+        recovery:
+          type: string
+          enum:
+          - Idle
+          - Running
+          - Failed
+        migration:
+          type: string
+          enum:
+          - Idle
+          - Running
+          - Failed
+        storagePressure:
+          type: string
+          enum:
+          - Normal
+          - Warning
+          - Critical
+        windowSeconds:
+          type: integer
+          minimum: 1
+        requestFailures:
+          type: integer
+          minimum: 0
+        requestLatencyMsP95:
+          type: number
+          minimum: 0
+        activeUploads:
+          type: integer
+          minimum: 0
+        activeTransfers:
+          type: integer
+          minimum: 0
+        pendingCleanup:
+          type: integer
+          minimum: 0
+        retryableCleanup:
+          type: integer
+          minimum: 0
+        backupsRunning:
+          type: integer
+          minimum: 0
+        backupsFailed:
+          type: integer
+          minimum: 0
+      required:
+      - readiness
+      - recovery
+      - migration
+      - storagePressure
+      - windowSeconds
+      - requestFailures
+      - requestLatencyMsP95
+      - activeUploads
+      - activeTransfers
+      - pendingCleanup
+      - retryableCleanup
+      - backupsRunning
+      - backupsFailed
+      additionalProperties: false
+      description: Redacted aggregates; counters and p95 use current server measurement window.
+    JsonData:
+      type:
+      - object
+      - array
+      - string
+      - number
+      - boolean
+      - 'null'
+      description: Any JSON value, including null; server-managed fields remain outside data.
+    App:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        slug:
+          type: string
+        ownerId:
+          type: string
+          format: uuid
+        visibility:
+          type: string
+          enum:
+          - Private
+          - Public
+        state:
+          type: string
+          enum:
+          - Draft
+          - Published
+      required:
+      - id
+      - name
+      - slug
+      - ownerId
+      - visibility
+      - state
+      additionalProperties: false
+    AppCreate:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+      required:
+      - name
+      additionalProperties: false
+    AppPatch:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+        slug:
+          type: string
+          minLength: 1
+        visibility:
+          type: string
+          enum:
+          - Private
+          - Public
+      required: []
+      additionalProperties: false
+    Release:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        appId:
+          type: string
+          format: uuid
+        state:
+          type: string
+          enum:
+          - Draft
+          - Published
+        version:
+          anyOf:
+          - type: string
+          - type: 'null'
+      required:
+      - id
+      - appId
+      - state
+      additionalProperties: false
+    ReleaseCreate:
+      type: object
+      properties:
+        version:
+          anyOf:
+          - type: string
+          - type: 'null'
+      required: []
+      additionalProperties: false
+    ReleasePatch:
+      type: object
+      properties:
+        version:
+          anyOf:
+          - type: string
+          - type: 'null'
+      required: []
+      additionalProperties: false
+    Artifact:
+      type: object
+      properties:
+        id:
+          type: string
+          pattern: ^(adfile:sha256:[0-9a-f]{64}|adtree:v1:sha256:[0-9a-f]{64})$
+        kind:
+          type: string
+          enum:
+          - File
+          - Tree
+        size:
+          anyOf:
+          - type: integer
+            minimum: 0
+            maximum: 18446744073709551615
+          - type: 'null'
+      required:
+      - id
+      - kind
+      additionalProperties: false
+      if:
+        properties:
+          kind:
+            const: File
+        required:
+        - kind
+      then:
+        properties:
+          id:
+            type: string
+            pattern: ^adfile:sha256:[0-9a-f]{64}$
+          size:
+            type: integer
+            minimum: 0
+            maximum: 18446744073709551615
+        required:
+        - size
+      else:
+        properties:
+          id:
+            type: string
+            pattern: ^adtree:v1:sha256:[0-9a-f]{64}$
+    Association:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        releaseId:
+          type: string
+          format: uuid
+        artifactId:
+          $ref: '#/components/schemas/ArtifactId'
+      required:
+      - id
+      - releaseId
+      - artifactId
+      additionalProperties: false
+    AssociationCreate:
+      type: object
+      properties:
+        artifactId:
+          $ref: '#/components/schemas/ArtifactId'
+      required:
+      - artifactId
+      additionalProperties: false
+    ArtifactId:
+      type: string
+      pattern: ^(adfile:sha256:[0-9a-f]{64}|adtree:v1:sha256:[0-9a-f]{64})$
+    Channel:
+      type: object
+      properties:
+        appId:
+          type: string
+          format: uuid
+        name:
+          type: string
+          pattern: ^[^/]+$
+        releaseId:
+          type: string
+          format: uuid
+      required:
+      - appId
+      - name
+      - releaseId
+      additionalProperties: false
+    ChannelPut:
+      type: object
+      properties:
+        releaseId:
+          type: string
+          format: uuid
+      required:
+      - releaseId
+      additionalProperties: false
+    ChannelMove:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        appId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        releaseId:
+          type: string
+          format: uuid
+        movedAt:
+          type: string
+          format: date-time
+      required:
+      - id
+      - appId
+      - name
+      - releaseId
+      - movedAt
+      additionalProperties: false
+    DeclarationDocument:
+      type: object
+      properties:
+        revisionId:
+          type: string
+          format: uuid
+        data:
+          $ref: '#/components/schemas/JsonData'
+      required:
+      - revisionId
+      - data
+      additionalProperties: false
+    DeclarationPut:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/JsonData'
+      required:
+      - data
+      additionalProperties: false
+    DeclarationRevision:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        data:
+          $ref: '#/components/schemas/JsonData'
+      required:
+      - id
+      - createdAt
+      - data
+      additionalProperties: false
+    SnapshotAssociation:
+      type: object
+      properties:
+        associationId:
+          type: string
+          format: uuid
+        declaration:
+          $ref: '#/components/schemas/DeclarationDocument'
+      required:
+      - associationId
+      - declaration
+      additionalProperties: false
+    DeclarationSnapshot:
+      type: object
+      properties:
+        releaseId:
+          type: string
+          format: uuid
+        app:
+          $ref: '#/components/schemas/DeclarationDocument'
+        release:
+          $ref: '#/components/schemas/DeclarationDocument'
+        associations:
+          type: array
+          items:
+            $ref: '#/components/schemas/SnapshotAssociation'
+      required:
+      - releaseId
+      - app
+      - release
+      - associations
+      additionalProperties: false
+    UploadCreate:
+      oneOf:
+      - type: object
+        properties:
+          mode:
+            const: BareFile
+          target:
+            $ref: '#/components/schemas/UploadTarget'
+          file:
+            $ref: '#/components/schemas/UploadFileClaim'
+        required:
+        - mode
+        - target
+        - file
+        additionalProperties: false
+      - type: object
+        properties:
+          mode:
+            const: BareTree
+          target:
+            $ref: '#/components/schemas/UploadTarget'
+        required:
+        - mode
+        - target
+        additionalProperties: false
+      - type: object
+        properties:
+          mode:
+            const: ZipImport
+          target:
+            $ref: '#/components/schemas/UploadTarget'
+          file:
+            $ref: '#/components/schemas/UploadFileClaim'
+        required:
+        - mode
+        - target
+        - file
+        additionalProperties: false
+    UploadTarget:
+      oneOf:
+      - type: object
+        properties:
+          releaseId:
+            type: string
+            format: uuid
+        required:
+        - releaseId
+        additionalProperties: false
+      - type: object
+        properties:
+          newAppName:
+            type: string
+            minLength: 1
+        required:
+        - newAppName
+        additionalProperties: false
+      - type: object
+        properties:
+          appId:
+            type: string
+            format: uuid
+          createRelease:
+            const: true
+        required:
+        - appId
+        - createRelease
+        additionalProperties: false
+      description: Exactly one existing Draft Release, new Draft App plus implicit Release, or existing App plus
+        implicit Draft Release.
+    UploadFileClaim:
+      type: object
+      properties:
+        size:
+          type: integer
+          minimum: 0
+          maximum: 18446744073709551615
+        sha256:
+          type: string
+          pattern: ^[0-9a-f]{64}$
+      required:
+      - size
+      - sha256
+      additionalProperties: false
+    UploadEntryInput:
+      oneOf:
+      - type: object
+        properties:
+          path:
+            type: string
+            minLength: 1
+          type:
+            const: File
+          size:
+            type: integer
+            minimum: 0
+            maximum: 18446744073709551615
+          sha256:
+            type: string
+            pattern: ^[0-9a-f]{64}$
+          executable:
+            type: boolean
+        required:
+        - path
+        - type
+        - size
+        - sha256
+        - executable
+        additionalProperties: false
+      - type: object
+        properties:
+          path:
+            type: string
+            minLength: 1
+          type:
+            const: Directory
+        required:
+        - path
+        - type
+        additionalProperties: false
+    UploadEntry:
+      type: object
+      properties:
+        path:
+          type: string
+        type:
+          type: string
+          enum:
+          - File
+          - Directory
+        fileId:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+        size:
+          anyOf:
+          - type: integer
+            minimum: 0
+            maximum: 18446744073709551615
+          - type: 'null'
+        sha256:
+          anyOf:
+          - type: string
+            pattern: ^[0-9a-f]{64}$
+          - type: 'null'
+        executable:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+        transferRequired:
+          type: boolean
+          default: true
+          description: False only after authorization-scoped verified-object reuse; omission means true.
+      required:
+      - path
+      - type
+      additionalProperties: false
+      if:
+        properties:
+          type:
+            const: File
+        required:
+        - type
+      then:
+        properties:
+          fileId:
+            type: string
+            format: uuid
+          size:
+            type: integer
+            minimum: 0
+            maximum: 18446744073709551615
+          sha256:
+            type: string
+            pattern: ^[0-9a-f]{64}$
+          executable:
+            type: boolean
+        required:
+        - fileId
+        - size
+        - sha256
+        - executable
+      else:
+        properties:
+          fileId:
+            type: 'null'
+          size:
+            type: 'null'
+          sha256:
+            type: 'null'
+          executable:
+            type: 'null'
+          transferRequired:
+            type: 'null'
+    InventoryBatch:
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/UploadEntryInput'
+      required:
+      - entries
+      additionalProperties: false
+    InventoryBatchResult:
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/UploadEntry'
+      required:
+      - entries
+      additionalProperties: false
+    UploadSession:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        operationId:
+          type: string
+          format: uuid
+        mode:
+          type: string
+          enum:
+          - BareFile
+          - BareTree
+          - ZipImport
+        phase:
+          type: string
+          enum:
+          - Receiving
+          - Verifying
+          - Importing
+          - Committing
+          - Completed
+          - Failed
+          - Cancelled
+        cancellationReason:
+          type: string
+          enum:
+          - RestoreInvalidated
+        inventoryComplete:
+          type: boolean
+        target:
+          $ref: '#/components/schemas/UploadTarget'
+        file:
+          anyOf:
+          - $ref: '#/components/schemas/UploadEntry'
+          - type: 'null'
+        resultUrl:
+          anyOf:
+          - type: string
+          - type: 'null'
+      required:
+      - id
+      - operationId
+      - mode
+      - phase
+      - inventoryComplete
+      - target
+      additionalProperties: false
+      if:
+        properties:
+          mode:
+            enum:
+            - BareFile
+            - ZipImport
+        required:
+        - mode
+      then:
+        required:
+        - file
+        properties:
+          file:
+            allOf:
+            - $ref: '#/components/schemas/UploadEntry'
+            - properties:
+                type:
+                  const: File
+              required:
+              - type
+      allOf:
+      - if:
+          required:
+          - cancellationReason
+        then:
+          properties:
+            phase:
+              const: Cancelled
+    Interval:
+      type: object
+      properties:
+        start:
+          type: integer
+          minimum: 0
+          maximum: 18446744073709551615
+        end:
+          type: integer
+          minimum: 1
+          maximum: 18446744073709551615
+      description: Half-open [start,end); end must exceed start.
+      required:
+      - start
+      - end
+      additionalProperties: false
+    UploadProgress:
+      type: object
+      properties:
+        sessionId:
+          type: string
+          format: uuid
+        fileId:
+          type: string
+          format: uuid
+        totalSize:
+          type: integer
+          minimum: 0
+          maximum: 18446744073709551615
+        ranges:
+          type: array
+          items:
+            $ref: '#/components/schemas/Interval'
+        nextCursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+        progressVersion:
+          type: integer
+          minimum: 0
+          maximum: 18446744073709551615
+      required:
+      - sessionId
+      - fileId
+      - totalSize
+      - ranges
+      - nextCursor
+      - progressVersion
+      additionalProperties: false
+    FinalizationResult:
+      type: object
+      properties:
+        sessionId:
+          type: string
+          format: uuid
+        operationId:
+          type: string
+          format: uuid
+        phase:
+          type: string
+          enum:
+          - Completed
+          - Failed
+          - Cancelled
+        cancellationReason:
+          type: string
+          enum:
+          - RestoreInvalidated
+        artifactId:
+          anyOf:
+          - $ref: '#/components/schemas/ArtifactId'
+          - type: 'null'
+        appId:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+        releaseId:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+        associationId:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+        problem:
+          anyOf:
+          - $ref: '#/components/schemas/Problem'
+          - type: 'null'
+      required:
+      - sessionId
+      - operationId
+      - phase
+      additionalProperties: false
+      if:
+        properties:
+          phase:
+            const: Completed
+        required:
+        - phase
+      then:
+        properties:
+          artifactId:
+            $ref: '#/components/schemas/ArtifactId'
+          appId:
+            type: string
+            format: uuid
+          releaseId:
+            type: string
+            format: uuid
+          associationId:
+            type: string
+            format: uuid
+        required:
+        - artifactId
+        - appId
+        - releaseId
+        - associationId
+      else:
+        if:
+          properties:
+            phase:
+              const: Failed
+          required:
+          - phase
+        then:
+          required:
+          - problem
+      allOf:
+      - if:
+          required:
+          - cancellationReason
+        then:
+          properties:
+            phase:
+              const: Cancelled
+          not:
+            anyOf:
+            - required:
+              - artifactId
+            - required:
+              - appId
+            - required:
+              - releaseId
+            - required:
+              - associationId
+    Operation:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum:
+          - Finalize
+          - CancelUpload
+          - DeleteApp
+          - DeleteRelease
+          - DeleteAssociation
+          - Backup
+        status:
+          type: string
+          enum:
+          - Accepted
+          - Running
+          - Completed
+          - Failed
+        backupId:
+          type: string
+          format: uuid
+        backupOutputAvailable:
+          type: boolean
+        accessRevoked:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+        physicalCleanup:
+          anyOf:
+          - type: string
+            enum:
+            - NotStarted
+            - Pending
+            - Completed
+            - RetryableFailure
+          - type: 'null'
+        result:
+          anyOf:
+          - $ref: '#/components/schemas/FinalizationResult'
+          - type: 'null'
+        problem:
+          anyOf:
+          - $ref: '#/components/schemas/Problem'
+          - type: 'null'
+      required:
+      - id
+      - kind
+      - status
+      additionalProperties: false
+      if:
+        properties:
+          kind:
+            enum:
+            - DeleteApp
+            - DeleteRelease
+            - DeleteAssociation
+        required:
+        - kind
+      then:
+        properties:
+          accessRevoked:
+            type: boolean
+          physicalCleanup:
+            type: string
+            enum:
+            - NotStarted
+            - Pending
+            - Completed
+            - RetryableFailure
+        required:
+        - accessRevoked
+        - physicalCleanup
+      allOf:
+      - if:
+          properties:
+            kind:
+              const: Backup
+          required:
+          - kind
+        then:
+          required:
+          - backupOutputAvailable
+          if:
+            properties:
+              status:
+                const: Completed
+            required:
+            - status
+          then:
+            required:
+            - backupId
+          else:
+            not:
+              required:
+              - backupId
+            properties:
+              backupOutputAvailable:
+                const: false
+        else:
+          allOf:
+          - not:
+              required:
+              - backupId
+          - not:
+              required:
+              - backupOutputAvailable
+      - if:
+          properties:
+            kind:
+              const: Backup
+            status:
+              const: Failed
+          required:
+          - kind
+          - status
+        then:
+          properties:
+            problem:
+              $ref: '#/components/schemas/Problem'
+          required:
+          - problem
+      - if:
+          properties:
+            kind:
+              enum:
+              - DeleteApp
+              - DeleteRelease
+          required:
+          - kind
+        then:
+          properties:
+            accessRevoked:
+              const: true
+          required:
+          - accessRevoked
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        username:
+          type: string
+        serverAdmin:
+          type: boolean
+        publishPermission:
+          type: boolean
+      required:
+      - id
+      - username
+      - serverAdmin
+      - publishPermission
+      additionalProperties: false
+    UserCreate:
+      type: object
+      properties:
+        username:
+          type: string
+          minLength: 1
+        password:
+          type: string
+          minLength: 1
+        publishPermission:
+          type: boolean
+      required:
+      - username
+      - password
+      additionalProperties: false
+    UserPatch:
+      type: object
+      properties:
+        publishPermission:
+          type: boolean
+        serverAdmin:
+          type: boolean
+      required: []
+      additionalProperties: false
+    TokenMetadata:
+      type: object
+      properties:
+        active:
+          type: boolean
+        issuedAt:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+      required:
+      - active
+      - issuedAt
+      additionalProperties: false
+    TokenIssue:
+      type: object
+      properties:
+        token:
+          type: string
+        metadata:
+          $ref: '#/components/schemas/TokenMetadata'
+      required:
+      - token
+      - metadata
+      additionalProperties: false
+    ServerSettings:
+      type: object
+      properties:
+        anonymousReadEnabled:
+          type: boolean
+      required:
+      - anonymousReadEnabled
+      additionalProperties: false
+    SettingsPatch:
+      type: object
+      properties:
+        anonymousReadEnabled:
+          type: boolean
+      required: []
+      additionalProperties: false
+    Capabilities:
+      type: object
+      properties:
+        apiVersion:
+          type: string
+        ingestionModes:
+          type: array
+          items:
+            type: string
+            enum:
+            - BareFile
+            - BareTree
+            - ZipImport
+        zipMethods:
+          type: array
+          items:
+            type: string
+            enum:
+            - Store
+            - Deflate
+        treeIdentity:
+          type: string
+        fileIdentity:
+          type: string
+        uploadRanges:
+          type: boolean
+        downloadRanges:
+          type: boolean
+        limits:
+          $ref: '#/components/schemas/Limits'
+        features:
+          type: array
+          items:
+            type: string
+      required:
+      - apiVersion
+      - ingestionModes
+      - zipMethods
+      - treeIdentity
+      - fileIdentity
+      - uploadRanges
+      - downloadRanges
+      - limits
+      - features
+      additionalProperties: false
+    Limits:
+      type: object
+      properties:
+        maxPageSize:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        maxConcurrentRanges:
+          type: integer
+          minimum: 1
+        maxUploadBytes:
+          type: integer
+          minimum: 1
+      required:
+      - maxPageSize
+      - maxConcurrentRanges
+      - maxUploadBytes
+      additionalProperties: false
+    Problem:
+      type: object
+      properties:
+        type:
+          type: string
+          description: 'Exactly "urn:app-depot:problem:" followed by the code value.'
+        title:
+          type: string
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+        detail:
+          type: string
+        instance:
+          type: string
+        code:
+          $ref: '#/components/schemas/ProblemCode'
+        operationId:
+          type: string
+          format: uuid
+        cancellationReason:
+          type: string
+          enum:
+          - RestoreInvalidated
+      required:
+      - type
+      - title
+      - status
+      - code
+      additionalProperties: false
+      allOf:
+      - if:
+          required:
+          - cancellationReason
+        then:
+          properties:
+            code:
+              const: session_cancelled
+            status:
+              const: 410
+      oneOf:
+      - properties:
+          code:
+            const: invalid_request
+          type:
+            const: urn:app-depot:problem:invalid_request
+      - properties:
+          code:
+            const: unauthenticated
+          type:
+            const: urn:app-depot:problem:unauthenticated
+      - properties:
+          code:
+            const: forbidden
+          type:
+            const: urn:app-depot:problem:forbidden
+      - properties:
+          code:
+            const: not_found
+          type:
+            const: urn:app-depot:problem:not_found
+      - properties:
+          code:
+            const: stale_etag
+          type:
+            const: urn:app-depot:problem:stale_etag
+      - properties:
+          code:
+            const: precondition_required
+          type:
+            const: urn:app-depot:problem:precondition_required
+      - properties:
+          code:
+            const: invalid_upload_range
+          type:
+            const: urn:app-depot:problem:invalid_upload_range
+      - properties:
+          code:
+            const: range_not_satisfiable
+          type:
+            const: urn:app-depot:problem:range_not_satisfiable
+      - properties:
+          code:
+            const: conflicting_upload_bytes
+          type:
+            const: urn:app-depot:problem:conflicting_upload_bytes
+      - properties:
+          code:
+            const: incomplete_upload
+          type:
+            const: urn:app-depot:problem:incomplete_upload
+      - properties:
+          code:
+            const: hash_mismatch
+          type:
+            const: urn:app-depot:problem:hash_mismatch
+      - properties:
+          code:
+            const: unsupported_zip_method
+          type:
+            const: urn:app-depot:problem:unsupported_zip_method
+      - properties:
+          code:
+            const: invalid_zip
+          type:
+            const: urn:app-depot:problem:invalid_zip
+      - properties:
+          code:
+            const: invalid_tree
+          type:
+            const: urn:app-depot:problem:invalid_tree
+      - properties:
+          code:
+            const: session_expired
+          type:
+            const: urn:app-depot:problem:session_expired
+      - properties:
+          code:
+            const: session_cancelled
+          type:
+            const: urn:app-depot:problem:session_cancelled
+      - properties:
+          code:
+            const: idempotency_conflict
+          type:
+            const: urn:app-depot:problem:idempotency_conflict
+      - properties:
+          code:
+            const: immutable_release
+          type:
+            const: urn:app-depot:problem:immutable_release
+      - properties:
+          code:
+            const: invalid_channel_target
+          type:
+            const: urn:app-depot:problem:invalid_channel_target
+      - properties:
+          code:
+            const: quota_exceeded
+          type:
+            const: urn:app-depot:problem:quota_exceeded
+      - properties:
+          code:
+            const: insufficient_storage
+          type:
+            const: urn:app-depot:problem:insufficient_storage
+      - properties:
+          code:
+            const: operation_running
+          type:
+            const: urn:app-depot:problem:operation_running
+      - properties:
+          code:
+            const: retryable_failure
+          type:
+            const: urn:app-depot:problem:retryable_failure
+      - properties:
+          code:
+            const: invalid_cursor
+          type:
+            const: urn:app-depot:problem:invalid_cursor
+      - properties:
+          code:
+            const: progress_changed
+          type:
+            const: urn:app-depot:problem:progress_changed
+      - properties:
+          code:
+            const: unsupported_artifact_kind
+          type:
+            const: urn:app-depot:problem:unsupported_artifact_kind
+      - properties:
+          code:
+            const: rate_limited
+          type:
+            const: urn:app-depot:problem:rate_limited
+    Login:
+      type: object
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+      required:
+      - username
+      - password
+      additionalProperties: false
+    BrowserSession:
+      type: object
+      properties:
+        user:
+          $ref: '#/components/schemas/User'
+        csrfToken:
+          type: string
+      required:
+      - user
+      - csrfToken
+      additionalProperties: false
+    InventoryEntry:
+      type: object
+      properties:
+        type:
+          type: string
+          enum:
+          - File
+          - Directory
+        path:
+          type: string
+        fileId:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+        size:
+          anyOf:
+          - type: integer
+            minimum: 0
+            maximum: 18446744073709551615
+          - type: 'null'
+        sha256:
+          anyOf:
+          - type: string
+            pattern: ^[0-9a-f]{64}$
+          - type: 'null'
+        executable:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+      required:
+      - type
+      - path
+      additionalProperties: false
+      if:
+        properties:
+          type:
+            const: File
+        required:
+        - type
+      then:
+        properties:
+          fileId:
+            type: string
+            format: uuid
+          size:
+            type: integer
+            minimum: 0
+            maximum: 18446744073709551615
+          sha256:
+            type: string
+            pattern: ^[0-9a-f]{64}$
+          executable:
+            type: boolean
+        required:
+        - fileId
+        - size
+        - sha256
+        - executable
+      else:
+        properties:
+          fileId:
+            type: 'null'
+          size:
+            type: 'null'
+          sha256:
+            type: 'null'
+          executable:
+            type: 'null'
+    AppPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/App'
+        nextCursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+      required:
+      - items
+      - nextCursor
+      additionalProperties: false
+    ReleasePage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Release'
+        nextCursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+      required:
+      - items
+      - nextCursor
+      additionalProperties: false
+    ArtifactPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Artifact'
+        nextCursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+      required:
+      - items
+      - nextCursor
+      additionalProperties: false
+    AssociationPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Association'
+        nextCursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+      required:
+      - items
+      - nextCursor
+      additionalProperties: false
+    ChannelPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Channel'
+        nextCursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+      required:
+      - items
+      - nextCursor
+      additionalProperties: false
+    ChannelMovePage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChannelMove'
+        nextCursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+      required:
+      - items
+      - nextCursor
+      additionalProperties: false
+    RevisionPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeclarationRevision'
+        nextCursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+      required:
+      - items
+      - nextCursor
+      additionalProperties: false
+    UserPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/User'
+        nextCursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+      required:
+      - items
+      - nextCursor
+      additionalProperties: false
+    InventoryPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/InventoryEntry'
+        nextCursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+      required:
+      - items
+      - nextCursor
+      additionalProperties: false
+    UploadInventoryPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/UploadEntry'
+        nextCursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+        inventoryVersion:
+          type: integer
+          minimum: 0
+      required:
+      - items
+      - nextCursor
+      - inventoryVersion
+      additionalProperties: false
+    ProblemCode:
+      type: string
+      enum:
+      - invalid_request
+      - unauthenticated
+      - forbidden
+      - not_found
+      - stale_etag
+      - precondition_required
+      - invalid_upload_range
+      - range_not_satisfiable
+      - conflicting_upload_bytes
+      - incomplete_upload
+      - hash_mismatch
+      - unsupported_zip_method
+      - invalid_zip
+      - invalid_tree
+      - session_expired
+      - session_cancelled
+      - idempotency_conflict
+      - immutable_release
+      - invalid_channel_target
+      - quota_exceeded
+      - insufficient_storage
+      - operation_running
+      - retryable_failure
+      - invalid_cursor
+      - progress_changed
+      - unsupported_artifact_kind
+      - rate_limited
