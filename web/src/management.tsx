@@ -137,6 +137,7 @@ export function DeclarationEditor({ path, editable, title, scope }: { path: stri
   const [error, setError] = useState<unknown>()
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
+  const [awaitingRevision, setAwaitingRevision] = useState('')
   const [cursor, setCursor] = useState('')
   const [historyOpen, setHistoryOpen] = useState(false)
   const revisions = useResource(`revisions:${path}:${cursor}:${historyOpen}:${message}`, signal => historyOpen
@@ -148,13 +149,16 @@ export function DeclarationEditor({ path, editable, title, scope }: { path: stri
     const value = JSON.stringify(current.value.value.data, null, 2)
     setText(value); setTextRevision(current.value.value.revisionId)
     if (!supportsStandardFields(value, scope)) setEditor('json')
-  } }, [current.value?.value.revisionId, scope])
+    if (awaitingRevision === current.value.value.revisionId) {
+      setAwaitingRevision(''); setMessage('Saved as a new declaration revision.')
+    }
+  } }, [current.value?.value.revisionId, scope, awaitingRevision])
   async function put(data: unknown) {
     setBusy(true); setError(undefined); setMessage('')
     try {
-      await apiRequest(path, { method: 'PUT', authenticated: true, csrf: state.session!.csrfToken,
+      const saved = await apiRequest<Declaration>(path, { method: 'PUT', authenticated: true, csrf: state.session!.csrfToken,
         ifMatch: current.value!.etag, ...jsonBody({ data }) })
-      setMessage('Saved as a new declaration revision.'); current.retry(); revisions.retry()
+      setAwaitingRevision(saved.value.revisionId); current.retry(); revisions.retry()
     } catch (failure) { setError(failure) } finally { setBusy(false) }
   }
   function save(event: FormEvent) {
@@ -166,7 +170,7 @@ export function DeclarationEditor({ path, editable, title, scope }: { path: stri
     catch (failure) { setError(failure) }
   }
   return <section className="panel"><h2>{title}</h2>
-    {current.loading ? <LoadingState /> : current.error ? <ProblemNotice error={current.error} retry={current.retry} /> : <>
+    {current.loading ? <LoadingState /> : current.error ? <ProblemNotice error={current.error} retry={current.retry} /> : awaitingRevision ? <LoadingState label="Loading saved revision…" /> : <>
       <p className="subtle">Standard fields are optional. Advanced JSON supports every valid value, including <code>null</code>; an explicit null differs from absent data.</p>
       {!supportsStandardFields(textRevision === current.value!.value.revisionId ? text : JSON.stringify(current.value!.value.data, null, 2), scope) && <p role="status">This declaration cannot be edited as standard fields. Its value is preserved in Advanced JSON.</p>}
       <div className="form-actions section-action"><button className="button button-secondary" aria-pressed={editor === 'standard'} disabled={!supportsStandardFields(textRevision === current.value!.value.revisionId ? text : JSON.stringify(current.value!.value.data, null, 2), scope)} onClick={() => setEditor('standard')}>Standard fields</button>

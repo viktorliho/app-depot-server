@@ -347,7 +347,20 @@ try {
   const appDeclarations = page.getByRole('heading', { name: 'Application data' }).locator('..')
   await appDeclarations.getByRole('button', { name: 'Advanced JSON' }).click()
   await appDeclarations.getByLabel('Current JSON value').fill('{"custom":{"keep":true},"appDepot":{"extension":"kept"}}')
+  let delayedDeclarationRead = false
+  await page.route(`**/api/v1/apps/${draftId}/declarations`, async route => {
+    if (route.request().method() === 'GET' && !delayedDeclarationRead) {
+      delayedDeclarationRead = true
+      await new Promise(resolve => setTimeout(resolve, 500))
+    }
+    await route.continue()
+  })
+  const rawAppSave = page.waitForResponse(response => response.url().endsWith(`/api/v1/apps/${draftId}/declarations`) && response.request().method() === 'PUT')
   await appDeclarations.getByRole('button', { name: 'Save new revision' }).click()
+  if ((await rawAppSave).status() !== 200) throw new Error('Raw App declaration save failed')
+  if (await appDeclarations.getByText('Saved as a new declaration revision.').isVisible()) throw new Error('Save confirmation preceded the current declaration refresh')
+  await appDeclarations.getByText('Saved as a new declaration revision.').waitFor()
+  await page.unroute(`**/api/v1/apps/${draftId}/declarations`)
   await appDeclarations.getByRole('button', { name: 'Standard fields' }).click()
   await appDeclarations.getByLabel('Summary').fill('An optional artifact catalog')
   await appDeclarations.getByRole('button', { name: 'Advanced JSON' }).click()
