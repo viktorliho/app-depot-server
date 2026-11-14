@@ -6,6 +6,7 @@ import { apiRequest, idempotencyKey, jsonBody, resource, type Artifact, type Ass
 import { ActionLink, EmptyState, LoadingState, PageHeader, ProblemNotice, StatusBadge, TechnicalDetails } from './components'
 import { useAuth } from './portal'
 import { useResource } from './use-resource'
+import { StandardMetadataForm, type MetadataScope } from './metadata'
 
 const enc = encodeURIComponent
 const canManage = (app: DepotApp, user: { id: string; serverAdmin: boolean }) => user.serverAdmin || user.id === app.ownerId
@@ -128,10 +129,11 @@ export function NewRelease() {
   </>
 }
 
-export function DeclarationEditor({ path, editable, title }: { path: string; editable: boolean; title: string }) {
+export function DeclarationEditor({ path, editable, title, scope }: { path: string; editable: boolean; title: string; scope: MetadataScope }) {
   const { state } = useAuth()
   const current = useResource(`declaration:${path}`, signal => resource<Declaration>(path, signal))
   const [text, setText] = useState('')
+  const [textRevision, setTextRevision] = useState('')
   const [error, setError] = useState<unknown>()
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
@@ -141,7 +143,8 @@ export function DeclarationEditor({ path, editable, title }: { path: string; edi
     ? apiRequest<Page<DeclarationRevision>>(`${path}/revisions?pageSize=10${cursor ? `&cursor=${enc(cursor)}` : ''}`, { authenticated: true, signal }).then(result => result.value)
     : Promise.resolve({ items: [], nextCursor: null }))
   const [selected, setSelected] = useState<DeclarationRevision>()
-  useEffect(() => { if (current.value) setText(JSON.stringify(current.value.value.data, null, 2)) }, [current.value?.value.revisionId])
+  const [editor, setEditor] = useState<'json' | 'standard'>('json')
+  useEffect(() => { if (current.value) { setText(JSON.stringify(current.value.value.data, null, 2)); setTextRevision(current.value.value.revisionId) } }, [current.value?.value.revisionId])
   async function put(data: unknown) {
     setBusy(true); setError(undefined); setMessage('')
     try {
@@ -160,9 +163,14 @@ export function DeclarationEditor({ path, editable, title }: { path: string; edi
   }
   return <section className="panel"><h2>{title}</h2>
     {current.loading ? <LoadingState /> : current.error ? <ProblemNotice error={current.error} retry={current.retry} /> : <>
-      <p className="subtle">Arbitrary JSON data. An explicit <code>null</code> is different from an absent value.</p>
-      <form className="form-stack" onSubmit={save}><label>Current JSON value<textarea rows={8} className="json-editor" value={text} onChange={event => setText(event.target.value)} readOnly={!editable} spellCheck={false} /></label>
-        {editable && <button className="button button-primary" disabled={busy}>{busy ? 'Saving…' : 'Save new revision'}</button>}</form>
+      <p className="subtle">Arbitrary JSON data remains available. An explicit <code>null</code> is different from an absent value.</p>
+      <div className="form-actions section-action"><button className="button button-secondary" aria-pressed={editor === 'standard'} onClick={() => setEditor('standard')}>Standard fields</button>
+        <button className="button button-secondary" aria-pressed={editor === 'json'} onClick={() => setEditor('json')}>JSON editor</button></div>
+      {editor === 'standard' ? <StandardMetadataForm key={current.value!.value.revisionId} scope={scope}
+        documentText={textRevision === current.value!.value.revisionId ? text : JSON.stringify(current.value!.value.data, null, 2)}
+        editable={editable} busy={busy} onSave={put} />
+        : <form className="form-stack" onSubmit={save}><label>Current JSON value<textarea rows={8} className="json-editor" value={text} onChange={event => setText(event.target.value)} readOnly={!editable} spellCheck={false} /></label>
+          {editable && <button className="button button-primary" disabled={busy}>{busy ? 'Saving…' : 'Save new revision'}</button>}</form>}
       {error !== undefined && <ProblemNotice error={error} />}{message && <Notice text={message} />}
       <TechnicalDetails><code>Current revision: {current.value!.value.revisionId}</code></TechnicalDetails>
       <button className="button button-secondary section-action" onClick={() => setHistoryOpen(value => !value)}>{historyOpen ? 'Hide revision history' : 'Show revision history'}</button>
@@ -180,7 +188,7 @@ export function AppDeclarations() {
   const app = useOutletContext<DepotApp>()
   const { state } = useAuth()
   return <><PageHeader title="Application declarations" description={`Optional JSON data for ${app.name}.`} />
-    <DeclarationEditor title="Application data" path={`/apps/${app.id}/declarations`} editable={canManage(app, state.session!.user)} /></>
+    <DeclarationEditor title="Application data" scope="app" path={`/apps/${app.id}/declarations`} editable={canManage(app, state.session!.user)} /></>
 }
 
 function Inventory({ artifactId }: { artifactId: string }) {
@@ -210,7 +218,7 @@ function ArtifactRow({ association, editable, removable, onRemoved }: { associat
       <TechnicalDetails><dl className="facts"><div><dt>Artifact ID</dt><dd><code>{artifact.value!.id}</code></dd></div><div><dt>Association ID</dt><dd><code>{association.id}</code></dd></div></dl></TechnicalDetails>
       {removable && current.value && <div className="section-action"><ConfirmDialog label="Remove association" detail="Remove this Artifact from the Draft release? This revokes the association; immutable content may remain shared elsewhere." confirm="Remove association" onConfirm={remove} /></div>}
     </>}
-    <DeclarationEditor title="Association declarations" path={`/associations/${association.id}/declarations`} editable={editable} />
+    <DeclarationEditor title="Association declarations" scope="association" path={`/associations/${association.id}/declarations`} editable={editable} />
   </section>
 }
 
@@ -282,7 +290,7 @@ export function ReleaseDetail() {
     </>}</section>
     {mutable && <section className="panel form-panel"><h2>Associate an existing Artifact</h2><p>Enter the identity of an Artifact already accessible to your account. Registration does not publish the Release.</p>
       <form className="form-stack" onSubmit={associate}><label>Artifact ID<input value={artifactId} onChange={event => setArtifactId(event.target.value)} required placeholder="adfile:sha256:… or adtree:v1:sha256:…" /></label><button className="button button-secondary" disabled={busy || !artifactId.trim()}>Associate Artifact</button></form></section>}
-    <DeclarationEditor title="Release declarations" path={`/releases/${releaseId}/declarations`} editable={allowed} />
+    <DeclarationEditor title="Release declarations" scope="release" path={`/releases/${releaseId}/declarations`} editable={allowed} />
     <section className="panel"><h2>Combined declaration snapshot</h2>{snapshot.loading ? <LoadingState /> : snapshot.error ? <ProblemNotice error={snapshot.error} retry={snapshot.retry} /> : <pre className="json-preview">{JSON.stringify(snapshot.value, null, 2)}</pre>}</section>
     {allowed && <section className="panel"><h2>Permanent deletion</h2><p>Deleting this Release revokes access and starts asynchronous cleanup. This cannot be undone.</p><ConfirmDialog label="Delete release" detail="Permanently delete this Release and its Artifact associations? Shared immutable content may remain available through other releases." confirm="Delete release" onConfirm={remove} /></section>}
   </>

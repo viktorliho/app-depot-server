@@ -193,12 +193,46 @@ try {
   await page.getByText('Saved as a new declaration revision.').waitFor()
   const nullDocument = await page.evaluate(async id => (await (await fetch(`/api/v1/apps/${id}/declarations`)).json()).data, draftId)
   if (nullDocument !== null) throw new Error('Explicit JSON null was not preserved')
+  await page.getByRole('button', { name: 'Standard fields' }).click()
+  await page.getByText('Standard fields require a JSON object. Use the JSON editor to preserve other values, including null.').waitFor()
+  await page.getByRole('button', { name: 'JSON editor' }).click()
   await page.getByRole('button', { name: 'Show revision history' }).click()
   await page.getByRole('button', { name: 'Inspect revision' }).nth(await emptyRevisionIndex(page, `/apps/${draftId}/declarations`)).click()
   await page.getByRole('button', { name: 'Restore as new revision' }).click()
   await page.getByText('Saved as a new declaration revision.').waitFor()
   const restoredAppData = await page.evaluate(async id => (await (await fetch(`/api/v1/apps/${id}/declarations`)).json()).data, draftId)
   if (JSON.stringify(restoredAppData) !== '{}') throw new Error(`App declaration restoration did not create the prior value: ${JSON.stringify(restoredAppData)}`)
+  const appDeclarations = page.getByRole('heading', { name: 'Application data' }).locator('..')
+  await appDeclarations.getByLabel('Current JSON value').fill('{"custom":{"keep":true},"appDepot":{"extension":"kept"}}')
+  await appDeclarations.getByRole('button', { name: 'Save new revision' }).click()
+  await appDeclarations.getByRole('button', { name: 'Standard fields' }).click()
+  await appDeclarations.getByLabel('Summary').fill('An optional artifact catalog')
+  await appDeclarations.getByLabel('Kind (optional free-form label)').fill('tool')
+  await appDeclarations.getByLabel('Tags (one per line)').fill('utilities\nutilities')
+  await appDeclarations.getByRole('button', { name: 'Save standard metadata' }).click()
+  await appDeclarations.getByText('Tags contains a duplicate entry.').waitFor()
+  await appDeclarations.getByLabel('Tags (one per line)').fill('utilities\nself-hosted')
+  await appDeclarations.getByRole('button', { name: 'Save standard metadata' }).click()
+  await appDeclarations.getByText('Saved as a new declaration revision.').waitFor()
+  const standardAppData = await page.evaluate(async id => (await (await fetch(`/api/v1/apps/${id}/declarations`)).json()).data, draftId)
+  if (standardAppData.custom?.keep !== true || standardAppData.appDepot?.extension !== 'kept' ||
+      standardAppData.appDepot?.kind !== 'tool' || standardAppData.appDepot?.tags?.length !== 2) {
+    throw new Error(`Standard App metadata lost extension data or typed fields: ${JSON.stringify(standardAppData)}`)
+  }
+  await appDeclarations.getByRole('button', { name: 'JSON editor' }).click()
+  if (!(await appDeclarations.getByLabel('Current JSON value').inputValue()).includes('self-hosted')) throw new Error('Standard fields did not update the full JSON editor')
+  await appDeclarations.getByRole('button', { name: 'Standard fields' }).click()
+  await appDeclarations.getByLabel('Kind (optional free-form label)').fill('')
+  await appDeclarations.getByLabel('Tags (one per line)').fill('')
+  await appDeclarations.getByRole('button', { name: 'Save standard metadata' }).click()
+  await page.waitForFunction(async id => {
+    const data = (await (await fetch(`/api/v1/apps/${id}/declarations`)).json()).data
+    return data.appDepot && !('kind' in data.appDepot) && !('tags' in data.appDepot)
+  }, draftId)
+  const optionalAppData = await page.evaluate(async id => (await (await fetch(`/api/v1/apps/${id}/declarations`)).json()).data, draftId)
+  if ('kind' in optionalAppData.appDepot || 'tags' in optionalAppData.appDepot || optionalAppData.appDepot.extension !== 'kept') {
+    throw new Error('Clearing optional fields did not remove only those fields')
+  }
   await page.goto(`${base}apps/${draftId}/releases/new`)
   await page.getByRole('heading', { name: 'Create Draft release' }).waitFor()
   await page.getByLabel('Version (optional)').fill('test-v1')
@@ -263,11 +297,31 @@ try {
   await page.getByRole('button', { name: 'Inspect revision' }).nth(await emptyRevisionIndex(page, `/associations/${firstAssociationId}/declarations`)).click()
   await page.getByRole('button', { name: 'Restore as new revision' }).click()
   await page.getByText('Saved as a new declaration revision.').first().waitFor()
+  const associationDeclarations = page.getByRole('heading', { name: 'Association declarations' }).first().locator('..')
+  await associationDeclarations.getByRole('button', { name: 'Standard fields' }).click()
+  await associationDeclarations.getByLabel('Artifact label').fill('Primary payload')
+  await associationDeclarations.getByLabel('Purpose').fill('distribution')
+  await associationDeclarations.getByRole('button', { name: 'Save standard metadata' }).click()
+  await associationDeclarations.getByText('Saved as a new declaration revision.').waitFor()
+  const standardAssociationData = await page.evaluate(async id => (await (await fetch(`/api/v1/associations/${id}/declarations`)).json()).data, firstAssociationId)
+  if (standardAssociationData.appDepot?.label !== 'Primary payload' || standardAssociationData.appDepot?.purpose !== 'distribution') {
+    throw new Error('Standard association metadata was not saved')
+  }
   await page.getByLabel('Current JSON value').last().fill('{"release":"data"}')
   await page.getByRole('button', { name: 'Save new revision' }).last().click()
   await page.getByText('Saved as a new declaration revision.').last().waitFor()
+  const releaseDeclarations = page.getByRole('heading', { name: 'Release declarations' }).locator('..')
+  await releaseDeclarations.getByRole('button', { name: 'Standard fields' }).click()
+  await releaseDeclarations.getByLabel('Release notes').fill('Initial public content')
+  await releaseDeclarations.getByLabel('Platforms (one per line)').fill('linux/amd64\nmacos/arm64')
+  await releaseDeclarations.getByLabel('Runtime name').fill('optional-runtime')
+  await releaseDeclarations.getByRole('button', { name: 'Save standard metadata' }).click()
+  await releaseDeclarations.getByText('Saved as a new declaration revision.').waitFor()
   const snapshot = await page.evaluate(async id => (await (await fetch(`/api/v1/releases/${id}/declaration-snapshot`)).json()), releaseId)
-  if (snapshot.release.data.release !== 'data' || snapshot.associations.length !== 2) throw new Error('Combined declaration snapshot is incomplete')
+  if (snapshot.release.data.release !== 'data' || snapshot.release.data.appDepot?.platforms?.length !== 2 ||
+      snapshot.release.data.appDepot?.runtime?.name !== 'optional-runtime' || snapshot.associations.length !== 2) {
+    throw new Error('Combined declaration snapshot is incomplete')
+  }
   const treeRoot = join(preview.namespace, 'browser-tree')
   await mkdir(join(treeRoot, 'nested'), { recursive: true })
   await writeFile(join(treeRoot, 'nested', 'tree.txt'), 'tree content')
@@ -631,7 +685,7 @@ try {
   })
   await page.reload()
   await page.getByRole('heading', { name: 'Sign in' }).waitFor()
-  console.log('Browser smoke passed: setup, auth, App/Release management, File/Tree/ZIP, declarations, channels, deletion, administration, account, operations, LAN HTTP and backup')
+  console.log('Browser smoke passed: setup, auth, App/Release management, File/Tree/ZIP, standard metadata, declarations, channels, deletion, administration, account, operations, LAN HTTP and backup')
 } finally {
   await browser?.close()
   if (preview) {

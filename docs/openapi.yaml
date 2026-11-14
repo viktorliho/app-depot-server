@@ -4804,7 +4804,7 @@ components:
       - number
       - boolean
       - 'null'
-      description: Any JSON value, including null; server-managed fields remain outside data.
+      description: Any JSON value, including null; server-managed fields remain outside data. Object values may use the optional appDepot metadata convention described in architecture.md; the Server does not validate or interpret it.
     App:
       type: object
       properties:
