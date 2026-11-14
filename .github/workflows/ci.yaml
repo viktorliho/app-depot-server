@@ -23,6 +23,7 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
       - run: npm --prefix web ci
+      - run: npm --prefix web run test:unit
       - run: npm --prefix web run build
       - run: npm --prefix web run smoke:lan-http
       - name: Validate OpenAPI

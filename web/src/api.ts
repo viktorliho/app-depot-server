@@ -27,13 +27,14 @@ export type BackupSummary = { id: string; formatVersion: number; capturedAt: str
 export type BackupMember = { entryId: string; kind: 'SqliteSnapshot' | 'CasObject'; relativePath: string; size: number; sha256: string }
 export type BackupManifest = { formatVersion: number; backupId: string; capturedAt: string; catalogFormatVersion: number; members: BackupMember[] }
 export type UploadSession = { id: string; operationId: string; file?: { fileId: string } | null; phase: string; inventoryComplete: boolean }
-export type FinalizationResult = { phase: string; appId?: string; releaseId?: string; artifactId?: string; associationId?: string; problem?: { title: string } }
+export type FinalizationResult = { phase: string; appId?: string; releaseId?: string; artifactId?: string; associationId?: string; problem?: { title: string; detail?: string; code?: string } }
 
 export class ApiError extends Error {
   constructor(public status: number, public code: string, title: string, public detail?: string) {
     super(title)
   }
 }
+export class SourceChangedError extends Error {}
 
 export function errorMessage(error: unknown): string {
   if (!(error instanceof ApiError)) return error instanceof Error ? error.message : 'Unexpected error.'
@@ -56,10 +57,17 @@ export function idempotencyKey(): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
 
-export async function fileSha256(file: File): Promise<string> {
+export async function fileSha256(file: File, signal?: AbortSignal, onBytes?: (count: number) => void): Promise<string> {
   const hash = sha256.create()
   for (let offset = 0; offset < file.size; offset += 4 * 1024 * 1024) {
-    hash.update(new Uint8Array(await file.slice(offset, offset + 4 * 1024 * 1024).arrayBuffer()))
+    if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError')
+    const end = Math.min(file.size, offset + 4 * 1024 * 1024)
+    let bytes: Uint8Array
+    try { bytes = new Uint8Array(await file.slice(offset, end).arrayBuffer()) }
+    catch { throw new SourceChangedError(`Source file ${file.name} became unreadable while hashing. Reselect it and start a new upload.`) }
+    if (bytes.length !== end - offset) throw new SourceChangedError(`Source file ${file.name} changed while hashing. Reselect it and start a new upload.`)
+    hash.update(bytes)
+    onBytes?.(end - offset)
   }
   return bytesToHex(hash.digest())
 }

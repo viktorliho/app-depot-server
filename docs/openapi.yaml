@@ -5730,6 +5730,7 @@ components:
             format: uuid
           - type: 'null'
         problem:
+          description: Terminal verification failures may include an authorized detail naming the original logical file and whether size or SHA-256 mismatched; physical paths and content digests are never disclosed.
           anyOf:
           - $ref: '#/components/schemas/Problem'
           - type: 'null'

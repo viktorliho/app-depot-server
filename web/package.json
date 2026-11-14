@@ -10,6 +10,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
+    "test:unit": "node --test tests/upload-selection.test.mjs",
     "smoke:browser": "node tests/browser-smoke.mjs",
     "smoke:lan-http": "APP_DEPOT_SELF_HOSTED=1 node tests/browser-smoke.mjs"
   },

@@ -436,6 +436,7 @@ try {
   await page.getByLabel('File', { exact: true }).setInputFiles({ name: 'content.txt', mimeType: 'text/plain', buffer: fileBytes })
   await page.getByRole('button', { name: 'Save Draft' }).click()
   await page.getByText('Saved Draft for Portal Draft Edited').waitFor({ timeout: 30000 })
+  await page.getByRole('region', { name: 'Upload progress' }).getByText('Completed').waitFor()
   await page.getByRole('link', { name: 'Open release' }).click()
   const fileArtifact = (await page.locator('code').filter({ hasText: 'adfile:sha256:' }).first().textContent()).match(/adfile:sha256:[0-9a-f]{64}/)?.[0]
   if (!fileArtifact) throw new Error('Uploaded File Artifact identity missing')
@@ -445,12 +446,15 @@ try {
   const largeBytes = Buffer.alloc(4 * 1024 * 1024 + 8, 65)
   const sentRanges = []
   let injectedFailure = false
+  let releaseFailure
+  const transferGate = new Promise(resolve => { releaseFailure = resolve })
   await page.route('**/api/v1/uploads/*/files/*', async route => {
     if (route.request().method() === 'PUT') {
       const range = route.request().headers()['content-range']
       sentRanges.push(range)
       if (range.startsWith('bytes 4194304-') && !injectedFailure) {
         injectedFailure = true
+        await transferGate
         await route.fulfill({ status: 503, contentType: 'application/problem+json', body: JSON.stringify({ title: 'Temporary transfer failure', status: 503 }) })
         return
       }
@@ -459,6 +463,8 @@ try {
   })
   await page.getByLabel('File', { exact: true }).setInputFiles({ name: 'resume.bin', mimeType: 'application/octet-stream', buffer: largeBytes })
   await page.getByRole('button', { name: 'Save Draft' }).click()
+  await page.getByText('99% of bytes acknowledged by Server').waitFor()
+  releaseFailure()
   await page.getByText('The server is not ready. Try again after recovery completes.').waitFor()
   await page.reload()
   await page.getByLabel('File', { exact: true }).setInputFiles({ name: 'resume.bin', mimeType: 'application/octet-stream', buffer: largeBytes })
@@ -468,7 +474,33 @@ try {
   if (sentRanges.filter(range => range.startsWith('bytes 0-')).length !== 1 || sentRanges.filter(range => range.startsWith('bytes 4194304-')).length !== 2) {
     throw new Error(`Upload retry did not honor authoritative ranges: ${JSON.stringify(sentRanges)}`)
   }
-  await page.getByRole('link', { name: 'Open release' }).click()
+  await page.goto(`${base}apps/${draftId}/releases/${releaseId}/uploads/new`)
+  await page.evaluate(() => {
+    const original = File.prototype.slice
+    let reads = 0
+    File.prototype.slice = function (start, end, contentType) {
+      if (this.name === 'changed-source.bin' && ++reads > 1) return new Blob([new Uint8Array([66])])
+      return original.call(this, start, end, contentType)
+    }
+  })
+  await page.getByLabel('File', { exact: true }).setInputFiles({ name: 'changed-source.bin', mimeType: 'application/octet-stream', buffer: Buffer.from('A') })
+  await page.getByRole('button', { name: 'Upload and publish' }).click()
+  await page.getByText(/Source file changed-source\.bin changed after hashing/).waitFor({ timeout: 30000 })
+  if (await page.getByRole('link', { name: 'Open release' }).count()) throw new Error('Changed source was registered or published')
+  if (await page.getByRole('button', { name: 'Upload and publish' }).isEnabled()) throw new Error('Changed source remained selected for retry')
+  await page.goto(`${base}apps/${draftId}/releases/${releaseId}/uploads/new`)
+  await page.getByLabel('File', { exact: true }).setInputFiles({ name: 'mtime-changed.bin', mimeType: 'application/octet-stream', buffer: Buffer.from('A') })
+  await page.evaluate(() => {
+    const original = Object.getOwnPropertyDescriptor(File.prototype, 'lastModified').get
+    let reads = 0
+    Object.defineProperty(File.prototype, 'lastModified', { configurable: true, get() {
+      const value = original.call(this)
+      return this.name === 'mtime-changed.bin' && ++reads >= 4 ? value + 1000 : value
+    } })
+  })
+  await page.getByRole('button', { name: 'Save Draft' }).click()
+  await page.getByText(/Source file mtime-changed\.bin changed size or modification time after selection/).waitFor({ timeout: 30000 })
+  await page.goto(`${base}apps/${draftId}/releases/${releaseId}`)
   const associationDeclarations = page.getByRole('heading', { name: 'Association declarations' }).first().locator('..')
   await associationDeclarations.getByRole('button', { name: 'Advanced JSON' }).click()
   await associationDeclarations.getByLabel('Current JSON value').fill('{"artifact":"data"}')
@@ -515,10 +547,16 @@ try {
   await mkdir(join(treeRoot, 'nested'), { recursive: true })
   await writeFile(join(treeRoot, 'nested', 'tree.txt'), 'tree content')
   await writeFile(join(treeRoot, 'nested', 'é漢字.txt'), 'utf8 content')
+  await writeFile(join(treeRoot, '.DS_Store'), 'changing finder metadata')
+  await writeFile(join(treeRoot, 'nested', '._tree.txt'), 'appledouble metadata')
+  await mkdir(join(treeRoot, '.Trashes'), { recursive: true })
+  await writeFile(join(treeRoot, '.Trashes', 'old'), 'trash metadata')
+  await writeFile(join(treeRoot, '.hidden-game'), 'valid hidden game data')
   await Promise.all(Array.from({ length: 51 }, (_, index) => writeFile(join(treeRoot, `zero-${String(index).padStart(2, '0')}.txt`), '')))
   await page.goto(`${base}apps/${draftId}/releases/${releaseId}/uploads/new`)
   await page.getByLabel('Upload mode').selectOption('BareTree')
   await page.getByLabel('Directory files').setInputFiles(treeRoot)
+  await page.getByText(/3 OS metadata files excluded/).waitFor()
   await page.getByLabel('Empty directory paths').fill('browser-tree/empty')
   await page.getByRole('button', { name: 'Save Draft' }).click()
   await page.getByText('Saved Draft for Portal Draft Edited').waitFor({ timeout: 30000 })
@@ -551,6 +589,13 @@ try {
     return inventory.items.find(item => item.path === 'browser-tree/nested/tree.txt').sha256
   }, treeFileLink)
   if (createHash('sha256').update(Buffer.from(treeBytes)).digest('hex') !== treeDigest) throw new Error('Tree download SHA-256 mismatch')
+  const selectionInventory = await page.evaluate(async id => {
+    const get = async q => (await (await fetch(`/api/v1/artifacts/${encodeURIComponent(id)}/inventory?q=${encodeURIComponent(q)}`)).json()).items
+    return { finder: await get('.DS_Store'), trash: await get('.Trashes'), hidden: await get('.hidden-game') }
+  }, treeArtifactId)
+  if (selectionInventory.finder.length || selectionInventory.trash.length || !selectionInventory.hidden.some(item => item.path === 'browser-tree/.hidden-game')) {
+    throw new Error('Default OS metadata exclusion removed valid hidden content or included metadata')
+  }
   await page.getByRole('row', { name: /tree\.txt/ }).getByRole('button', { name: 'Add entry point' }).click()
   await page.getByRole('button', { name: 'Add entry point' }).last().click()
   await page.getByLabel('Label (optional)').fill('Tree script')
@@ -590,6 +635,22 @@ try {
   await page.reload()
   await page.getByRole('heading', { name: 'Artifact Explorer' }).waitFor()
   if (await page.getByLabel('Label (optional)').inputValue() !== 'Tree script') throw new Error('Entry point label was not restored after reload')
+  const exactRoot = join(preview.namespace, 'exact-tree')
+  await mkdir(exactRoot)
+  await writeFile(join(exactRoot, '.DS_Store'), 'exact metadata')
+  await writeFile(join(exactRoot, '.hidden-game'), 'exact hidden content')
+  await page.goto(`${base}apps/${draftId}/releases/${releaseId}/uploads/new`)
+  await page.getByLabel('Upload mode').selectOption('BareTree')
+  await page.getByLabel('Directory files').setInputFiles(exactRoot)
+  await page.getByText(/1 OS metadata files excluded/).waitFor()
+  await page.getByLabel('Exclude common macOS and Windows metadata files').uncheck()
+  await page.getByText(/0 OS metadata files excluded/).waitFor()
+  await page.getByRole('button', { name: 'Save Draft' }).click()
+  await page.getByText('Saved Draft for Portal Draft Edited').waitFor({ timeout: 30000 })
+  const exactAssociation = await associationWithRoot(page, releaseId, 'exact-tree')
+  const exactArtifact = await page.evaluate(async id => (await (await fetch(`/api/v1/associations/${id}`)).json()).artifactId, exactAssociation)
+  const exactMetadata = await page.evaluate(async id => (await (await fetch(`/api/v1/artifacts/${encodeURIComponent(id)}/inventory?q=.DS_Store`)).json()).items, exactArtifact)
+  if (!exactMetadata.some(item => item.path === 'exact-tree/.DS_Store')) throw new Error('Exact tree upload excluded OS metadata')
   const zipPath = join(preview.namespace, 'bundle.zip')
   execFileSync('python3', ['-c', 'import sys,zipfile; z=zipfile.ZipFile(sys.argv[1],"w",zipfile.ZIP_DEFLATED); z.writestr("zip/nested.txt","zip content"); z.close()', zipPath])
   await page.goto(`${base}apps/${draftId}/releases/${releaseId}/uploads/new`)

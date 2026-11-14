@@ -249,7 +249,7 @@ impl From<UploadError> for ApiError {
                 "invalid_upload_range",
                 "Invalid upload range",
             ),
-            UploadError::HashMismatch => (
+            UploadError::HashMismatch { .. } => (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "hash_mismatch",
                 "Hash mismatch",

@@ -157,9 +157,13 @@ impl UploadAdapter {
         code: &str,
         title: &str,
         status: u16,
+        detail: Option<String>,
     ) -> Result<FinalizationResult, UploadError> {
         let session = self.stored(id).await?;
-        let problem = serde_json::json!({"type":format!("urn:app-depot:problem:{code}"),"title":title,"status":status,"code":code});
+        let mut problem = serde_json::json!({"type":format!("urn:app-depot:problem:{code}"),"title":title,"status":status,"code":code});
+        if let Some(detail) = detail {
+            problem["detail"] = serde_json::Value::String(detail);
+        }
         let result = FinalizationResult {
             session_id: id.into(),
             operation_id: session.public.operation_id.clone(),
@@ -868,7 +872,15 @@ impl UploadPort for UploadAdapter {
                         "CAS identity verification failed".into(),
                     ))
                 } else {
-                    Err(UploadError::HashMismatch)
+                    Err(UploadError::HashMismatch {
+                        file_id: file.file_id,
+                        logical_path: file.path,
+                        reason: if actual_size != size {
+                            "size"
+                        } else {
+                            "sha256"
+                        },
+                    })
                 };
             }
         }
@@ -1220,8 +1232,31 @@ impl UploadPort for UploadAdapter {
         }
     }
 
-    async fn fail_hash(&self, id: &str) -> Result<FinalizationResult, UploadError> {
-        self.mark_failed(id, "hash_mismatch", "Hash mismatch", 422)
+    async fn fail_hash(
+        &self,
+        id: &str,
+        file_id: &str,
+        logical_path: &str,
+        reason: &str,
+    ) -> Result<FinalizationResult, UploadError> {
+        let session = self.stored(id).await?;
+        eprintln!(
+            "{}",
+            serde_json::json!({
+                "severity": "error",
+                "event": "upload_file_verification_failed",
+                "sessionId": id,
+                "operationId": session.public.operation_id,
+                "fileId": file_id,
+                "phase": "Verifying",
+                "mismatchKind": reason,
+            })
+        );
+        let detail = format!(
+            "Original file {logical_path:?} failed {} verification. The upload is terminal; reselect the source and start a new upload after checking that files are not changing.",
+            if reason == "size" { "size" } else { "SHA-256" }
+        );
+        self.mark_failed(id, "hash_mismatch", "Hash mismatch", 422, Some(detail))
             .await
     }
 
@@ -1241,18 +1276,30 @@ impl UploadPort for UploadAdapter {
     ) -> Result<FinalizationResult, UploadError> {
         match reason {
             UploadError::ImmutableRelease => {
-                self.mark_failed(id, "immutable_release", "Immutable release", 409)
+                self.mark_failed(id, "immutable_release", "Immutable release", 409, None)
                     .await
             }
-            UploadError::Forbidden => self.mark_failed(id, "forbidden", "Forbidden", 403).await,
-            UploadError::NotFound => self.mark_failed(id, "not_found", "Not found", 404).await,
+            UploadError::Forbidden => {
+                self.mark_failed(id, "forbidden", "Forbidden", 403, None)
+                    .await
+            }
+            UploadError::NotFound => {
+                self.mark_failed(id, "not_found", "Not found", 404, None)
+                    .await
+            }
             UploadError::InvalidZip => {
-                self.mark_failed(id, "invalid_zip", "Invalid ZIP", 422)
+                self.mark_failed(id, "invalid_zip", "Invalid ZIP", 422, None)
                     .await
             }
             UploadError::UnsupportedZipMethod => {
-                self.mark_failed(id, "unsupported_zip_method", "Unsupported ZIP method", 422)
-                    .await
+                self.mark_failed(
+                    id,
+                    "unsupported_zip_method",
+                    "Unsupported ZIP method",
+                    422,
+                    None,
+                )
+                .await
             }
             _ => Err(UploadError::Invalid),
         }
@@ -1797,6 +1844,183 @@ mod tests {
     use super::*;
     use crate::{auth::bootstrap_admin, init_local, lock_local, open_catalog, LocalMode};
     use app_depot_application::upload::UploadCoordinator;
+
+    #[tokio::test]
+    async fn many_file_tree_and_file_specific_hash_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        init_local(dir.path(), "large-tree", LocalMode::Dev).unwrap();
+        let lock = lock_local(dir.path(), "large-tree", LocalMode::Dev).unwrap();
+        let pool = open_catalog(&lock).await.unwrap();
+        let secret = dir.path().join("bootstrap");
+        fs::write(&secret, "safe secret phrase 12345").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&secret, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        bootstrap_admin(&pool, Some(&secret)).await.unwrap();
+        let user = crate::auth::verify_password(&pool, "admin", "safe secret phrase 12345")
+            .await
+            .unwrap()
+            .unwrap();
+        let coordinator =
+            UploadCoordinator::new(UploadAdapter::new(pool.clone(), lock.path.clone()));
+        let create = |key: &'static str| async {
+            coordinator
+                .create(
+                    &user,
+                    key,
+                    &UploadCreate {
+                        mode: "BareTree".into(),
+                        target: Target::NewApp {
+                            new_app_name: key.into(),
+                        },
+                        file: None,
+                    },
+                )
+                .await
+                .unwrap()
+        };
+        let session = create("many-file-tree").await;
+        let empty_hash = format!("{:x}", Sha256::digest(b""));
+        let content_hash = format!("{:x}", Sha256::digest(b"content"));
+        let mut entries = vec![
+            InventoryEntryInput::Directory {
+                path: "nested".into(),
+            },
+            InventoryEntryInput::Directory {
+                path: "nested/empty".into(),
+            },
+        ];
+        for index in 0..1200 {
+            entries.push(InventoryEntryInput::File {
+                path: format!("nested/file-{index:04}.bin"),
+                size: if index % 100 == 0 { 7 } else { 0 },
+                sha256: if index % 100 == 0 {
+                    content_hash.clone()
+                } else {
+                    empty_hash.clone()
+                },
+                executable: false,
+            });
+        }
+        entries.sort_by(|left, right| left.path().as_bytes().cmp(right.path().as_bytes()));
+        let mut nonempty = Vec::new();
+        for (index, batch) in entries.chunks(100).enumerate() {
+            let result = coordinator
+                .append_inventory(
+                    &user,
+                    &session.id,
+                    &format!("batch-{index}"),
+                    &InventoryBatch {
+                        entries: batch.to_vec(),
+                    },
+                )
+                .await
+                .unwrap();
+            for entry in result.entries {
+                if let InventoryEntry::File {
+                    path,
+                    file_id,
+                    size: 7,
+                    ..
+                } = entry
+                {
+                    nonempty.push((path, file_id));
+                }
+            }
+        }
+        coordinator
+            .complete_inventory(&user, &session.id, "complete")
+            .await
+            .unwrap();
+        for (_, file_id) in &nonempty {
+            let mut bytes: &[u8] = b"content";
+            coordinator
+                .receive(
+                    &user,
+                    &session.id,
+                    file_id,
+                    Interval { start: 0, end: 7 },
+                    &mut bytes,
+                )
+                .await
+                .unwrap();
+        }
+        let result = coordinator
+            .finalize(&user, &session.id, "finalize")
+            .await
+            .unwrap();
+        assert_eq!(result.phase, "Completed");
+        let count: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM artifact_entries WHERE artifact_id=?")
+                .bind(result.artifact_id.as_ref().unwrap())
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(count, 1202);
+
+        let bad = create("changed-source-tree").await;
+        let result = coordinator
+            .append_inventory(
+                &user,
+                &bad.id,
+                "bad-batch",
+                &InventoryBatch {
+                    entries: vec![InventoryEntryInput::File {
+                        path: "changed.txt".into(),
+                        size: 1,
+                        sha256: format!("{:x}", Sha256::digest(b"A")),
+                        executable: false,
+                    }],
+                },
+            )
+            .await
+            .unwrap();
+        let file_id = match &result.entries[0] {
+            InventoryEntry::File { file_id, .. } => file_id,
+            _ => panic!("file expected"),
+        };
+        coordinator
+            .complete_inventory(&user, &bad.id, "bad-complete")
+            .await
+            .unwrap();
+        let mut changed: &[u8] = b"B";
+        coordinator
+            .receive(
+                &user,
+                &bad.id,
+                file_id,
+                Interval { start: 0, end: 1 },
+                &mut changed,
+            )
+            .await
+            .unwrap();
+        let failed = coordinator
+            .finalize(&user, &bad.id, "bad-finalize")
+            .await
+            .unwrap();
+        assert_eq!(failed.phase, "Failed");
+        assert_eq!(failed.problem.as_ref().unwrap()["code"], "hash_mismatch");
+        assert!(failed.problem.as_ref().unwrap()["detail"]
+            .as_str()
+            .unwrap()
+            .contains("changed.txt"));
+        assert_eq!(
+            coordinator.get(&user, &bad.id).await.unwrap().phase,
+            "Failed"
+        );
+        let stranger = Principal {
+            id: "stranger".into(),
+            username: "stranger".into(),
+            server_admin: false,
+            publish_permission: false,
+        };
+        assert!(matches!(
+            coordinator.result(&stranger, &bad.id).await,
+            Err(UploadError::NotFound)
+        ));
+    }
 
     #[tokio::test]
     async fn bare_file_bytes_commit_once_with_authoritative_progress() {

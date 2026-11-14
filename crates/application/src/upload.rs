@@ -253,7 +253,11 @@ pub enum UploadError {
     #[error("invalid upload range")]
     InvalidRange,
     #[error("hash mismatch")]
-    HashMismatch,
+    HashMismatch {
+        file_id: String,
+        logical_path: String,
+        reason: &'static str,
+    },
     #[error("immutable release")]
     ImmutableRelease,
     #[error("idempotency conflict")]
@@ -322,7 +326,13 @@ pub trait UploadPort: Send + Sync {
         id: &str,
         principal: &Principal,
     ) -> Result<FinalizationResult, UploadError>;
-    async fn fail_hash(&self, id: &str) -> Result<FinalizationResult, UploadError>;
+    async fn fail_hash(
+        &self,
+        id: &str,
+        file_id: &str,
+        logical_path: &str,
+        reason: &str,
+    ) -> Result<FinalizationResult, UploadError>;
     async fn fail_precommit(
         &self,
         id: &str,
@@ -812,8 +822,15 @@ impl<P: UploadPort> UploadCoordinator<P> {
             self.port.freeze(id).await?;
         }
         match self.port.verify(id).await {
-            Err(UploadError::HashMismatch) => {
-                let result = self.port.fail_hash(id).await?;
+            Err(UploadError::HashMismatch {
+                file_id,
+                logical_path,
+                reason,
+            }) => {
+                let result = self
+                    .port
+                    .fail_hash(id, &file_id, &logical_path, reason)
+                    .await?;
                 let _ = self.port.cleanup_pending().await;
                 let _ = self.port.gc_unreferenced().await;
                 return Ok(result);
