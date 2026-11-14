@@ -310,8 +310,8 @@ async fn run_one(
     {
         let _exclusive = boundary.write().await;
         let mut tx = pool.begin().await?;
-        sqlx::query("INSERT INTO backup_pins(operation_id, digest) SELECT ?, digest FROM artifacts WHERE digest IS NOT NULL UNION SELECT ?, sha256 FROM artifact_entries WHERE sha256 IS NOT NULL")
-            .bind(id).bind(id).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO backup_pins(operation_id, digest) SELECT ?, digest FROM artifacts WHERE digest IS NOT NULL UNION SELECT ?, sha256 FROM artifact_entries WHERE sha256 IS NOT NULL UNION SELECT ?, digest FROM artwork_bindings")
+            .bind(id).bind(id).bind(id).execute(&mut *tx).await?;
         sqlx::query("UPDATE backup_operations SET status='Running', updated_at=? WHERE id=?")
             .bind(now())
             .bind(id)

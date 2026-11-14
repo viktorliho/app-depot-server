@@ -9,6 +9,7 @@ import { UploadPage } from './uploads'
 import { UsersPage, DiagnosticsPage, ServerSettingsPage } from './admin'
 import { BackupsPage } from './backups'
 import { AccountPage } from './account'
+import { ArtworkPage } from './artwork'
 import './style.css'
 
 createRoot(document.getElementById('root')!).render(<React.StrictMode><BrowserRouter><ThemeProvider><AuthProvider><Routes>
@@ -36,6 +37,7 @@ createRoot(document.getElementById('root')!).render(<React.StrictMode><BrowserRo
     <Route path="releases/:releaseId/uploads/new" element={<UploadPage target="release" />} />
     <Route path="uploads/new" element={<UploadPage target="app" />} />
     <Route path="channels" element={<ChannelsPage />} />
+    <Route path="artwork" element={<ArtworkPage />} />
     <Route path="declarations" element={<AppDeclarations />} />
     <Route path="settings" element={<AppSettings />} />
     <Route path="*" element={<UnavailablePage />} />

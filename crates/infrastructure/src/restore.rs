@@ -99,7 +99,7 @@ async fn inspect_catalog(
     if version != expected_version {
         return Err(RestoreError::InvalidBackup);
     }
-    let rows = sqlx::query("SELECT digest FROM artifacts WHERE digest IS NOT NULL UNION SELECT sha256 AS digest FROM artifact_entries WHERE sha256 IS NOT NULL")
+    let rows = sqlx::query("SELECT digest FROM artifacts WHERE digest IS NOT NULL UNION SELECT sha256 AS digest FROM artifact_entries WHERE sha256 IS NOT NULL UNION SELECT digest FROM artwork_bindings")
         .fetch_all(&pool).await?;
     let required: HashSet<String> = rows.into_iter().map(|row| row.get("digest")).collect();
     if !required.is_subset(manifest_cas) {
@@ -143,6 +143,9 @@ async fn invalidated_catalog(path: &Path) -> Result<(), RestoreError> {
             .await?;
     }
     sqlx::query("DELETE FROM backup_pins")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM artwork_claims")
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;

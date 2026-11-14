@@ -1455,6 +1455,170 @@ paths:
       security:
       - bearerAuth: []
       - cookieAuth: []
+  /apps/{app_id}/artwork:
+    get:
+      operationId: listAppArtwork
+      tags: [Artwork]
+      summary: List current App artwork bindings, ordered by role
+      parameters:
+      - name: app_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Current artwork for an accessible App
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Artwork' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /apps/{app_id}/artwork/{role}:
+    parameters:
+    - name: app_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    - name: role
+      in: path
+      required: true
+      schema: { type: string, minLength: 1, maxLength: 80 }
+    get:
+      operationId: getAppArtwork
+      tags: [Artwork]
+      summary: Read a current artwork binding
+      responses:
+        '200':
+          description: Current artwork metadata
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Strong current binding validator
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Artwork' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      operationId: putAppArtwork
+      tags: [Artwork]
+      summary: Create or replace one current artwork binding
+      description: Creation requires If-None-Match star; replacement requires the current strong If-Match. Bytes are sniffed and fully decoded. Exactly one precondition header is required.
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema: { type: string, minLength: 1, maxLength: 255 }
+      - name: If-Match
+        in: header
+        schema: { type: string }
+      - name: If-None-Match
+        in: header
+        schema: { type: string }
+      - name: X-CSRF-Token
+        in: header
+        schema: { type: string }
+        description: Required for cookie-authenticated mutations.
+      requestBody:
+        required: true
+        content:
+          image/png:
+            schema: { type: string, format: binary }
+          image/jpeg:
+            schema: { type: string, format: binary }
+          image/webp:
+            schema: { type: string, format: binary }
+      responses:
+        '200':
+          description: Binding created, replaced, or exact idempotent replay
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Strong current binding validator
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Artwork' }
+        '400': { $ref: '#/components/responses/InvalidRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '428': { $ref: '#/components/responses/PreconditionRequired' }
+    delete:
+      operationId: deleteAppArtwork
+      tags: [Artwork]
+      summary: Remove one current artwork binding
+      parameters:
+      - name: If-Match
+        in: header
+        required: true
+        schema: { type: string }
+      - name: X-CSRF-Token
+        in: header
+        schema: { type: string }
+      responses:
+        '204': { description: Binding removed }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '428': { $ref: '#/components/responses/PreconditionRequired' }
+  /apps/{app_id}/artwork/{role}/content:
+    get:
+      operationId: downloadAppArtwork
+      tags: [Artwork]
+      summary: Read original image bytes through App authorization
+      parameters:
+      - name: app_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: role
+        in: path
+        required: true
+        schema: { type: string }
+      - name: Range
+        in: header
+        schema: { type: string }
+      - name: If-Range
+        in: header
+        schema: { type: string }
+      responses:
+        '200':
+          description: Original PNG, JPEG or WebP bytes
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+            X-Content-Type-Options:
+              schema: { type: string, const: nosniff }
+          content:
+            image/png:
+              schema: { type: string, format: binary }
+            image/jpeg:
+              schema: { type: string, format: binary }
+            image/webp:
+              schema: { type: string, format: binary }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '206':
+          description: A satisfiable single byte range of the original image
+          content:
+            image/png:
+              schema: { type: string, format: binary }
+            image/jpeg:
+              schema: { type: string, format: binary }
+            image/webp:
+              schema: { type: string, format: binary }
+        '416': { $ref: '#/components/responses/InvalidRequest' }
   /apps/{app_id}/releases:
     get:
       operationId: listReleases
@@ -4539,6 +4703,34 @@ paths:
       - bearerAuth: []
       - cookieAuth: []
 components:
+  responses:
+    InvalidRequest:
+      description: Invalid request
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    Unauthenticated:
+      description: Authentication required
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    Forbidden:
+      description: Caller may view this App but cannot modify its artwork
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    NotFound:
+      description: Missing or inaccessible resource
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    Conflict:
+      description: Conflicting idempotency key or state
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    PreconditionFailed:
+      description: Stale strong ETag
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    PayloadTooLarge:
+      description: Artwork exceeds encoded or decoded limits
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    Unprocessable:
+      description: Invalid or unsupported image
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    PreconditionRequired:
+      description: Current binding validator required
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
   securitySchemes:
     bearerAuth:
       type: http
@@ -4805,6 +4997,20 @@ components:
       - boolean
       - 'null'
       description: Any JSON value, including null; server-managed fields remain outside data. Object values may use the optional appDepot metadata convention described in architecture.md; the Server does not validate or interpret it.
+    Artwork:
+      type: object
+      properties:
+        appId: { type: string, format: uuid }
+        role: { type: string, minLength: 1, maxLength: 80 }
+        id: { type: string, format: uuid }
+        digest: { type: string, pattern: '^[0-9a-f]{64}$' }
+        mimeType: { type: string, enum: [image/png, image/jpeg, image/webp] }
+        size: { type: integer, minimum: 1, maximum: 8388608 }
+        width: { type: integer, minimum: 1, maximum: 8192 }
+        height: { type: integer, minimum: 1, maximum: 8192 }
+        etag: { type: string }
+      required: [appId, role, id, digest, mimeType, size, width, height, etag]
+      additionalProperties: false
     App:
       type: object
       properties:

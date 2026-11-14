@@ -2,12 +2,15 @@
 
 The normative machine-readable contract is [OpenAPI 3.1](openapi.yaml). This document defines cross-request semantics. The base path is `/api/v1`; JSON resources use `application/json`, binary transfer uses `application/octet-stream`, and errors use RFC 9457 `application/problem+json`. Resource keys are stable IDs. A file Artifact ID is `adfile:sha256:<64 lowercase hex>`; a tree Artifact ID is `adtree:v1:sha256:<64 lowercase hex>`. App and Release UUIDs, association UUIDs, declaration revision UUIDs, upload/session/operation UUIDs and internal CAS identities are distinct. Slugs and visible versions are attributes, not keys. [Tree Identity v1](tree-identity.md) and [reliable upload/commit](upload-commit.md) remain authoritative.
 
+Artwork content is the exception to the ordinary binary `application/octet-stream` response: it uses the validated image MIME type so browsers can display it safely.
+
 ## Resources and routes
 
 | Area | Routes (relative to `/api/v1`) |
 | --- | --- |
 | Capabilities/account | `GET /capabilities`; `GET, POST /setup`; `POST /auth/sessions`, `GET, DELETE /auth/sessions/current`; `GET, PUT, DELETE /me/token`; `GET, POST /users`, `GET, PATCH /users/{user_id}`, `DELETE /users/{user_id}/token`; `GET, PATCH /settings` |
 | Apps and Releases | `GET, POST /apps`; `GET, PATCH, DELETE /apps/{app_id}`; `GET, POST /apps/{app_id}/releases`; `GET, PATCH, DELETE /releases/{release_id}`; `POST /releases/{release_id}/publish` |
+| Artwork | `GET /apps/{app_id}/artwork`; `GET, PUT, DELETE /apps/{app_id}/artwork/{role}`; `GET /apps/{app_id}/artwork/{role}/content` |
 | Channels | `GET /apps/{app_id}/channels`; `GET, PUT, DELETE /apps/{app_id}/channels/{name}`; `GET /apps/{app_id}/channels/{name}/history` |
 | Artifact context | `GET /artifacts/{artifact_id}`; `GET, POST /releases/{release_id}/artifacts`; `GET, DELETE /associations/{association_id}` |
 | Declarations | `GET, PUT /apps/{app_id}/declarations`, `/releases/{release_id}/declarations`, `/associations/{association_id}/declarations`; each has `GET …/revisions` and `GET …/revisions/{revision_id}`; `GET /releases/{release_id}/declaration-snapshot` |
@@ -16,6 +19,14 @@ The normative machine-readable contract is [OpenAPI 3.1](openapi.yaml). This doc
 | Operations and backup | `GET /health/live`, `/health/ready`; `POST, GET /backups`; `GET /backups/{backup_id}`, `/backups/{backup_id}/entries/{entry_id}`; `GET /admin/diagnostics` |
 
 `Artifact` is immutable content; `Association` gives it Release-specific context. A Draft Release may receive multiple associations, one at a time, via `POST /releases/{release_id}/artifacts`, and lose them via `DELETE /associations/{association_id}`. The existing Artifact must be legitimately accessible for association. Published Release composition is immutable; attempts return `409 immutable_release`. A Release can have multiple Artifacts. `POST /releases/{release_id}/publish` alone publishes a Draft Release with at least one associated Artifact, requires the owner's current Publish permission (or Server Admin) and a strong Release `If-Match`. Registration never publishes. An authorized minimal workflow may create a Draft App by `POST /apps`, then a Draft Release by `POST /apps/{app_id}/releases`, or bind an upload to `newAppName` / `appId` plus `createRelease:true` for atomic implicit creation at finalization. A bare tree still requires a regular file; no software declaration, version, channel or installer is mandatory.
+
+## App artwork
+
+Artwork is optional and App-owned. It is independent of Releases, software Artifacts, associations, declarations and App kind. The current bindings use role identifiers such as `icon`, `logo`, `steam.grid.vertical`, `steam.grid.horizontal`, `steam.hero` and `steam.logo`; other lowercase role identifiers are accepted. A role has at most one current image per App. Role identifiers are 1–80 ASCII characters, start with a lowercase letter, use lowercase letters, digits, `.`, `_` or `-`, contain no `..`, and end with a letter or digit. Clients percent-encode the role as one URL path segment.
+
+`GET /apps/{app_id}/artwork` returns `{ "items": [...] }` ordered by role. `GET /apps/{app_id}/artwork/{role}` returns current metadata and a strong binding ETag. Metadata contains `appId`, `role`, opaque binding `id`, SHA-256 `digest`, detected `mimeType`, `size`, `width`, `height` and `etag`. The digest is an immutable content identity, not an access credential or software Artifact ID. `GET …/content` returns the original bytes with the detected safe image MIME type, `X-Content-Type-Options: nosniff` and `Cache-Control: no-store`. An App owner or Server Admin may read and manage artwork on a Private or Draft App; other readers may read it only when the App is Public and Published, and anonymous readers additionally require the global anonymous-read policy. Knowledge of a digest does not grant access. A missing or inaccessible binding returns `404`.
+
+`PUT /apps/{app_id}/artwork/{role}` accepts raw PNG, JPEG or WebP bytes and requires an `Idempotency-Key`; browser sessions also require Origin and CSRF checks. Creation requires `If-None-Match: *`; replacement requires the current strong `If-Match`. The Server detects and fully decodes the image rather than trusting the supplied MIME or extension. The maximum encoded size is 8 MiB, each dimension is at most 8192 pixels, and decoded area at most 16 megapixels; invalid or unsupported images return `422`, oversized input `413`. A successful creation or replacement returns `200` with current metadata and a new strong ETag. Exact idempotent retry returns the prior successful result; conflicting key reuse returns `409`. Replacement remains invisible until verified CAS bytes and the new binding commit. `DELETE` requires the current strong `If-Match` and returns `204`; it removes only this App-role binding. Missing preconditions return `428`, stale ones `412`. Unreferenced bytes are reclaimed after cleanup; shared CAS bytes remain while another legitimate reference exists. Artwork is included in online backup and offline restore.
 
 ## Authentication and authorization
 
@@ -77,7 +88,7 @@ Each error has `type` exactly equal to `"urn:app-depot:problem:" + code`, matchi
 | 401 / 403 / 404 | `unauthenticated` / `forbidden` / `not_found` |
 | 409 | `conflicting_upload_bytes`, `incomplete_upload`, `idempotency_conflict`, `immutable_release`, `invalid_channel_target`, `operation_running`, `unsupported_artifact_kind`, `progress_changed` |
 | 410 / 412 / 428 | `session_expired`, `session_cancelled` / `stale_etag` / `precondition_required` |
-| 413 / 422 | `quota_exceeded` / `hash_mismatch`, `unsupported_zip_method` |
+| 413 / 422 | `quota_exceeded`, `image_too_large` / `hash_mismatch`, `unsupported_zip_method`, `invalid_image`, `unsupported_image` |
 | 416 / 429 / 507 / 503 | `range_not_satisfiable` / `rate_limited` / `insufficient_storage` / `retryable_failure` |
 
 Invalid upload `Content-Range` returns `400`, never download-style `416`. A range whose declared total conflicts with the session is `400`; a byte conflict with accepted staging is `409`. Error bodies do not reveal hidden resource details.

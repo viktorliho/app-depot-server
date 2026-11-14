@@ -208,7 +208,7 @@ async fn tree_file(
     serve_blob(&state.root, &digest, size, &headers).await
 }
 
-async fn serve_blob(
+pub(crate) async fn serve_blob(
     root: &FsPath,
     digest: &str,
     size: u64,

@@ -21,6 +21,7 @@ use std::{
 };
 use tower_http::services::{ServeDir, ServeFile};
 
+mod artwork;
 mod auth;
 mod backups;
 mod catalog;
@@ -215,6 +216,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     lock.path.clone(),
                 ),
             ));
+            app_depot_infrastructure::artwork::recover_claims(&pool, &lock.path).await?;
             let idle_seconds: i64 = if let Some(config) = &production_config {
                 config.upload_idle_seconds
             } else {
@@ -254,6 +256,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .merge(catalog::router(catalog::CatalogState {
                     auth: auth_state.clone(),
                     coordinator: coordinator.clone(),
+                }))
+                .merge(artwork::router(artwork::ArtworkState {
+                    auth: auth_state.clone(),
+                    root: Arc::new(lock.path.clone()),
                 }))
                 .merge(declarations::router(auth_state.clone()))
                 .merge(diagnostics::router(diagnostics::DiagnosticsState {

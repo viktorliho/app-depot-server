@@ -275,7 +275,12 @@ fn uncovered(request: &Interval, recorded: &[Interval]) -> Vec<Interval> {
     missing
 }
 
-fn promote_file(root: &Path, stage: &Path, digest: &str, size: u64) -> Result<(), UploadError> {
+pub(crate) fn promote_file(
+    root: &Path,
+    stage: &Path,
+    digest: &str,
+    size: u64,
+) -> Result<(), UploadError> {
     let cas = root.join("cas");
     let parent = cas.join(&digest[..2]);
     if !parent.exists() {
@@ -1504,7 +1509,18 @@ impl UploadPort for UploadAdapter {
                 let entry = entry.map_err(retry)?;
                 let name = entry.file_name().to_string_lossy().to_string();
                 if name.starts_with(".candidate-") {
-                    fs::remove_file(entry.path()).map_err(retry)?;
+                    // A concurrent promotion may still be writing this candidate.
+                    if entry
+                        .metadata()
+                        .map_err(retry)?
+                        .modified()
+                        .map_err(retry)?
+                        .elapsed()
+                        .unwrap_or_default()
+                        > std::time::Duration::from_secs(86400)
+                    {
+                        fs::remove_file(entry.path()).map_err(retry)?;
+                    }
                     continue;
                 }
                 if name.len() != 64
@@ -1514,23 +1530,33 @@ impl UploadPort for UploadAdapter {
                 {
                     continue;
                 }
+                let mut tx = self.pool.begin().await.map_err(db)?;
+                // Acquire SQLite's write lock before checking references. A new artwork claim
+                // cannot race between the reference check and physical removal.
+                sqlx::query("UPDATE cas_objects SET size=size WHERE digest=?")
+                    .bind(&name)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(db)?;
                 let references: i64 =
-                    sqlx::query_scalar("SELECT (SELECT count(*) FROM artifacts WHERE digest=?) + (SELECT count(*) FROM artifact_entries WHERE sha256=?)")
+                    sqlx::query_scalar("SELECT (SELECT count(*) FROM artifacts WHERE digest=?) + (SELECT count(*) FROM artifact_entries WHERE sha256=?) + (SELECT count(*) FROM artwork_bindings WHERE digest=?)")
                         .bind(&name)
                         .bind(&name)
-                        .fetch_one(&self.pool)
+                        .bind(&name)
+                        .fetch_one(&mut *tx)
                         .await
                         .map_err(db)?;
                 let claims: i64 =
-                    sqlx::query_scalar("SELECT count(*) FROM prepared_claims WHERE digest=?")
+                    sqlx::query_scalar("SELECT (SELECT count(*) FROM prepared_claims WHERE digest=?) + (SELECT count(*) FROM artwork_claims WHERE digest=?)")
                         .bind(&name)
-                        .fetch_one(&self.pool)
+                        .bind(&name)
+                        .fetch_one(&mut *tx)
                         .await
                         .map_err(db)?;
                 let backup_pins: i64 =
                     sqlx::query_scalar("SELECT count(*) FROM backup_pins WHERE digest=?")
                         .bind(&name)
-                        .fetch_one(&self.pool)
+                        .fetch_one(&mut *tx)
                         .await
                         .map_err(db)?;
                 if references == 0 && claims == 0 && backup_pins == 0 {
@@ -1538,18 +1564,19 @@ impl UploadPort for UploadAdapter {
                     File::open(parent.path())
                         .and_then(|f| f.sync_all())
                         .map_err(retry)?;
-                    sqlx::query("DELETE FROM cas_objects WHERE digest=? AND NOT EXISTS (SELECT 1 FROM artifacts WHERE digest=?) AND NOT EXISTS (SELECT 1 FROM artifact_entries WHERE sha256=?) AND NOT EXISTS (SELECT 1 FROM backup_pins WHERE digest=?)")
-                        .bind(&name).bind(&name).bind(&name).bind(&name).execute(&self.pool).await.map_err(db)?;
+                    sqlx::query("DELETE FROM cas_objects WHERE digest=? AND NOT EXISTS (SELECT 1 FROM artifacts WHERE digest=?) AND NOT EXISTS (SELECT 1 FROM artifact_entries WHERE sha256=?) AND NOT EXISTS (SELECT 1 FROM artwork_bindings WHERE digest=?) AND NOT EXISTS (SELECT 1 FROM prepared_claims WHERE digest=?) AND NOT EXISTS (SELECT 1 FROM artwork_claims WHERE digest=?) AND NOT EXISTS (SELECT 1 FROM backup_pins WHERE digest=?)")
+                        .bind(&name).bind(&name).bind(&name).bind(&name).bind(&name).bind(&name).bind(&name).execute(&mut *tx).await.map_err(db)?;
                 }
+                tx.commit().await.map_err(db)?;
             }
         }
-        let orphaned = sqlx::query("SELECT digest FROM cas_objects c WHERE NOT EXISTS (SELECT 1 FROM artifacts a WHERE a.digest=c.digest) AND NOT EXISTS (SELECT 1 FROM artifact_entries e WHERE e.sha256=c.digest) AND NOT EXISTS (SELECT 1 FROM prepared_claims p WHERE p.digest=c.digest) AND NOT EXISTS (SELECT 1 FROM backup_pins b WHERE b.digest=c.digest)")
+        let orphaned = sqlx::query("SELECT digest FROM cas_objects c WHERE NOT EXISTS (SELECT 1 FROM artifacts a WHERE a.digest=c.digest) AND NOT EXISTS (SELECT 1 FROM artifact_entries e WHERE e.sha256=c.digest) AND NOT EXISTS (SELECT 1 FROM artwork_bindings w WHERE w.digest=c.digest) AND NOT EXISTS (SELECT 1 FROM prepared_claims p WHERE p.digest=c.digest) AND NOT EXISTS (SELECT 1 FROM artwork_claims w WHERE w.digest=c.digest) AND NOT EXISTS (SELECT 1 FROM backup_pins b WHERE b.digest=c.digest)")
             .fetch_all(&self.pool).await.map_err(db)?;
         for row in orphaned {
             let digest: String = row.get("digest");
             if !cas.join(&digest[..2]).join(&digest).exists() {
-                sqlx::query("DELETE FROM cas_objects WHERE digest=? AND NOT EXISTS (SELECT 1 FROM artifacts WHERE digest=?) AND NOT EXISTS (SELECT 1 FROM artifact_entries WHERE sha256=?) AND NOT EXISTS (SELECT 1 FROM prepared_claims WHERE digest=?) AND NOT EXISTS (SELECT 1 FROM backup_pins WHERE digest=?)")
-                    .bind(&digest).bind(&digest).bind(&digest).bind(&digest).bind(&digest).execute(&self.pool).await.map_err(db)?;
+                sqlx::query("DELETE FROM cas_objects WHERE digest=? AND NOT EXISTS (SELECT 1 FROM artifacts WHERE digest=?) AND NOT EXISTS (SELECT 1 FROM artifact_entries WHERE sha256=?) AND NOT EXISTS (SELECT 1 FROM artwork_bindings WHERE digest=?) AND NOT EXISTS (SELECT 1 FROM prepared_claims WHERE digest=?) AND NOT EXISTS (SELECT 1 FROM artwork_claims WHERE digest=?) AND NOT EXISTS (SELECT 1 FROM backup_pins WHERE digest=?)")
+                    .bind(&digest).bind(&digest).bind(&digest).bind(&digest).bind(&digest).bind(&digest).bind(&digest).execute(&self.pool).await.map_err(db)?;
             }
         }
         Ok(())
@@ -1607,7 +1634,7 @@ impl UploadPort for UploadAdapter {
                     .bind(now()).bind(&operation_id).execute(&self.pool).await.map_err(db)?;
                 continue;
             }
-            let unresolved: i64 = sqlx::query_scalar("SELECT (SELECT count(*) FROM deletion_artifacts d WHERE d.operation_id=? AND EXISTS (SELECT 1 FROM artifacts a WHERE a.id=d.artifact_id AND NOT EXISTS (SELECT 1 FROM associations x WHERE x.artifact_id=a.id))) + (SELECT count(*) FROM deletion_cas d WHERE d.operation_id=? AND NOT EXISTS (SELECT 1 FROM artifacts a WHERE a.digest=d.digest) AND NOT EXISTS (SELECT 1 FROM artifact_entries e WHERE e.sha256=d.digest) AND (EXISTS (SELECT 1 FROM cas_objects c WHERE c.digest=d.digest) OR EXISTS (SELECT 1 FROM prepared_claims p WHERE p.digest=d.digest)))")
+            let unresolved: i64 = sqlx::query_scalar("SELECT (SELECT count(*) FROM deletion_artifacts d WHERE d.operation_id=? AND EXISTS (SELECT 1 FROM artifacts a WHERE a.id=d.artifact_id AND NOT EXISTS (SELECT 1 FROM associations x WHERE x.artifact_id=a.id))) + (SELECT count(*) FROM deletion_cas d WHERE d.operation_id=? AND NOT EXISTS (SELECT 1 FROM artifacts a WHERE a.digest=d.digest) AND NOT EXISTS (SELECT 1 FROM artifact_entries e WHERE e.sha256=d.digest) AND NOT EXISTS (SELECT 1 FROM artwork_bindings w WHERE w.digest=d.digest) AND (EXISTS (SELECT 1 FROM cas_objects c WHERE c.digest=d.digest) OR EXISTS (SELECT 1 FROM prepared_claims p WHERE p.digest=d.digest) OR EXISTS (SELECT 1 FROM artwork_claims w WHERE w.digest=d.digest)))")
                 .bind(&operation_id).bind(&operation_id).fetch_one(&self.pool).await.map_err(db)?;
             if unresolved != 0 {
                 continue;

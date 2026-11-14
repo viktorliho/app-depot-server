@@ -4,6 +4,7 @@ import { bytesToHex } from '@noble/hashes/utils'
 export type User = { id: string; username: string; serverAdmin: boolean; publishPermission: boolean }
 export type BrowserSession = { user: User; csrfToken: string }
 export type DepotApp = { id: string; name: string; slug: string; ownerId: string; state: 'Draft' | 'Published'; visibility: 'Private' | 'Public' }
+export type Artwork = { appId: string; role: string; id: string; digest: string; mimeType: string; size: number; width: number; height: number; etag: string }
 export type AppPage = { items: DepotApp[]; nextCursor: string | null }
 export type Release = { id: string; appId: string; state: 'Draft' | 'Published'; version?: string | null }
 export type ReleasePage = { items: Release[]; nextCursor: string | null }

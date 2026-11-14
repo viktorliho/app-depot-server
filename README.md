@@ -2,7 +2,7 @@
 
 App Depot Server is a self-hosted service for storing, cataloging, publishing, and distributing software artifacts. An App can publish a file or a directory tree with at least one regular file. Software-specific metadata is optional. The Server never executes uploaded content; clients handle installation and execution.
 
-The Rust Server serves an HTTP API and Web UI backed by SQLite and a content-addressed store. It supports resumable uploads, private and public catalog entries, versioned declarations, durable deletion, and portable backup and offline restore. The API contract is [OpenAPI 3.1](docs/openapi.yaml), with semantics in [API v1](docs/api.md).
+The Rust Server serves an HTTP API and Web UI backed by SQLite and a content-addressed store. It supports resumable uploads, private and public catalog entries, optional App artwork, versioned declarations, durable deletion, and portable backup and offline restore. The API contract is [OpenAPI 3.1](docs/openapi.yaml), with semantics in [API v1](docs/api.md).
 
 ## Compatibility (pre-1.0)
 

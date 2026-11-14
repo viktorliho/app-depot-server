@@ -173,6 +173,26 @@ impl From<CatalogError> for ApiError {
             CatalogError::StaleEtag => {
                 (StatusCode::PRECONDITION_FAILED, "stale_etag", "Stale ETag")
             }
+            CatalogError::InvalidImage => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_image",
+                "Invalid image",
+            ),
+            CatalogError::UnsupportedImage => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "unsupported_image",
+                "Unsupported image format",
+            ),
+            CatalogError::ImageTooLarge => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "image_too_large",
+                "Image exceeds artwork limits",
+            ),
+            CatalogError::Storage => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "retryable_failure",
+                "Storage unavailable",
+            ),
             CatalogError::Sql(_) | CatalogError::Json(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "retryable_failure",

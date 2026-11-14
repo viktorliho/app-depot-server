@@ -13,6 +13,7 @@ use std::{
 };
 use uuid::Uuid;
 
+pub mod artwork;
 pub mod auth;
 pub mod backups;
 pub mod catalog;

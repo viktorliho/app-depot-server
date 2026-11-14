@@ -76,6 +76,16 @@ fn request(
     request_full(addr, method, path, token, extra, body).map(|(status, body, _)| (status, body))
 }
 
+fn response_etag(head: &str) -> String {
+    head.lines()
+        .find_map(|line| {
+            line.split_once(':')
+                .filter(|(name, _)| name.eq_ignore_ascii_case("etag"))
+                .map(|(_, value)| value.trim().to_owned())
+        })
+        .expect("response ETag")
+}
+
 fn start(root: &std::path::Path, addr: SocketAddr) -> Server {
     let child = Command::new(env!("CARGO_BIN_EXE_app-depot-server"))
         .args([
@@ -107,6 +117,527 @@ fn start(root: &std::path::Path, addr: SocketAddr) -> Server {
         std::thread::sleep(Duration::from_millis(50));
     }
     server
+}
+
+#[tokio::test]
+async fn app_artwork_is_verified_private_shared_and_restorable() {
+    const PNG: &[u8] = include_bytes!("fixtures/artwork.png");
+    const JPEG: &[u8] = include_bytes!("fixtures/artwork.jpg");
+    const WEBP: &[u8] = include_bytes!("fixtures/artwork.webp");
+    let dir = tempfile::tempdir().unwrap();
+    init_local(dir.path(), "crash", LocalMode::Dev).unwrap();
+    let lock = lock_local(dir.path(), "crash", LocalMode::Dev).unwrap();
+    let pool = open_catalog(&lock).await.unwrap();
+    let setup = auth::prepare_setup(&pool).await.unwrap().unwrap();
+    assert!(
+        auth::complete_setup(&pool, &setup, "admin", "safe secret phrase 12345")
+            .await
+            .unwrap()
+    );
+    let admin = auth::verify_password(&pool, "admin", "safe secret phrase 12345")
+        .await
+        .unwrap()
+        .unwrap();
+    let (token, _) = auth::issue_token(&pool, &admin.id).await.unwrap();
+    let outsider = auth::create_user(
+        &pool,
+        &admin,
+        "reader",
+        "reader",
+        "safe secret phrase 12345",
+        false,
+    )
+    .await
+    .unwrap();
+    let (reader_token, _) = auth::issue_token(&pool, &outsider.id).await.unwrap();
+    pool.close().await;
+    drop(lock);
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    let server = start(dir.path(), addr);
+    let create_app = |name: &str, key: &str| -> String {
+        let (status, body) = request(
+            addr,
+            "POST",
+            "/api/v1/apps",
+            &token,
+            &[
+                ("Idempotency-Key", key),
+                ("Content-Type", "application/json"),
+            ],
+            json!({"name":name}).to_string().as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(status, 201, "{}", String::from_utf8_lossy(&body));
+        serde_json::from_slice::<Value>(&body).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let app = create_app("Artwork Draft", "artwork-app-1");
+    let second = create_app("Shared bytes", "artwork-app-2");
+    let path = format!("/api/v1/apps/{app}/artwork/icon");
+    let (status, body, head) = request_full(
+        addr,
+        "PUT",
+        &path,
+        &token,
+        &[
+            ("Idempotency-Key", "artwork-png"),
+            ("If-None-Match", "*"),
+            ("Content-Type", "image/jpeg"),
+        ],
+        PNG,
+    )
+    .unwrap();
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+    let first: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(first["mimeType"], "image/png");
+    assert_eq!(first["width"], 2);
+    assert_eq!(first["height"], 3);
+    let first_tag = response_etag(&head);
+    let (status, _, replay_head) = request_full(
+        addr,
+        "PUT",
+        &path,
+        &token,
+        &[("Idempotency-Key", "artwork-png"), ("If-None-Match", "*")],
+        PNG,
+    )
+    .unwrap();
+    assert_eq!(status, 200);
+    assert_eq!(response_etag(&replay_head), first_tag);
+    assert_eq!(
+        request(
+            addr,
+            "PUT",
+            &path,
+            &token,
+            &[("Idempotency-Key", "artwork-png"), ("If-None-Match", "*")],
+            JPEG
+        )
+        .unwrap()
+        .0,
+        409
+    );
+    assert_eq!(
+        request(
+            addr,
+            "PUT",
+            &path,
+            &token,
+            &[("Idempotency-Key", "bad-if-match-star"), ("If-Match", "*")],
+            JPEG
+        )
+        .unwrap()
+        .0,
+        412
+    );
+    assert_eq!(
+        request(
+            addr,
+            "PUT",
+            &path,
+            &token,
+            &[
+                ("Idempotency-Key", "bad-if-none-etag"),
+                ("If-None-Match", &first_tag)
+            ],
+            JPEG
+        )
+        .unwrap()
+        .0,
+        412
+    );
+    let (status, bytes, head) =
+        request_full(addr, "GET", &format!("{path}/content"), &token, &[], &[]).unwrap();
+    assert_eq!(status, 200);
+    assert_eq!(bytes, PNG);
+    assert!(head
+        .to_ascii_lowercase()
+        .contains("content-type: image/png"));
+    assert!(head
+        .to_ascii_lowercase()
+        .contains("x-content-type-options: nosniff"));
+    assert_eq!(
+        request(addr, "GET", &format!("{path}/content"), "", &[], &[])
+            .unwrap()
+            .0,
+        401
+    );
+    drop(server);
+    let lock = lock_local(dir.path(), "crash", LocalMode::Dev).unwrap();
+    let pool = open_catalog(&lock).await.unwrap();
+    let interrupted = "11111111-1111-4111-8111-111111111111";
+    sqlx::query("INSERT INTO artwork_claims(id, digest, created_at) VALUES(?, ?, 1)")
+        .bind(interrupted)
+        .bind(format!("{:x}", Sha256::digest(JPEG)))
+        .execute(&pool)
+        .await
+        .unwrap();
+    fs::write(
+        dir.path()
+            .join("crash/ops")
+            .join(format!("artwork-{interrupted}")),
+        JPEG,
+    )
+    .unwrap();
+    pool.close().await;
+    drop(lock);
+    let server = start(dir.path(), addr);
+    assert_eq!(
+        request(addr, "GET", &format!("{path}/content"), &token, &[], &[])
+            .unwrap()
+            .1,
+        PNG
+    );
+    assert!(!dir
+        .path()
+        .join("crash/ops")
+        .join(format!("artwork-{interrupted}"))
+        .exists());
+    assert_eq!(
+        request(addr, "GET", &path, &reader_token, &[], &[])
+            .unwrap()
+            .0,
+        404
+    );
+    assert_eq!(
+        request(
+            addr,
+            "GET",
+            &format!("{path}/content"),
+            &reader_token,
+            &[],
+            &[]
+        )
+        .unwrap()
+        .0,
+        404
+    );
+    assert_eq!(
+        request(
+            addr,
+            "PUT",
+            &path,
+            &reader_token,
+            &[
+                ("Idempotency-Key", "outsider-artwork"),
+                ("If-Match", &first_tag)
+            ],
+            JPEG
+        )
+        .unwrap()
+        .0,
+        404
+    );
+    assert_eq!(
+        request(
+            addr,
+            "PUT",
+            &path,
+            &token,
+            &[("Idempotency-Key", "bad-artwork"), ("If-Match", &first_tag)],
+            b"not an image"
+        )
+        .unwrap()
+        .0,
+        422
+    );
+    let truncated = &PNG[..PNG.len() / 2];
+    assert_eq!(
+        request(
+            addr,
+            "PUT",
+            &path,
+            &token,
+            &[
+                ("Idempotency-Key", "unsupported-artwork"),
+                ("If-Match", &first_tag)
+            ],
+            include_bytes!("fixtures/artwork.gif")
+        )
+        .unwrap()
+        .0,
+        422
+    );
+    assert_eq!(
+        request(
+            addr,
+            "PUT",
+            &path,
+            &token,
+            &[
+                ("Idempotency-Key", "truncated-artwork"),
+                ("If-Match", &first_tag)
+            ],
+            truncated
+        )
+        .unwrap()
+        .0,
+        422
+    );
+    let second_path = format!("/api/v1/apps/{second}/artwork/custom.banner");
+    assert_eq!(
+        request(
+            addr,
+            "PUT",
+            &second_path,
+            &token,
+            &[
+                ("Idempotency-Key", "shared-artwork"),
+                ("If-None-Match", "*")
+            ],
+            PNG
+        )
+        .unwrap()
+        .0,
+        200
+    );
+    let (status, body, head) = request_full(
+        addr,
+        "PUT",
+        &path,
+        &token,
+        &[
+            ("Idempotency-Key", "artwork-jpeg"),
+            ("If-Match", &first_tag),
+        ],
+        JPEG,
+    )
+    .unwrap();
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["mimeType"],
+        "image/jpeg"
+    );
+    let jpeg_tag = response_etag(&head);
+    let (status, bytes, image_head) =
+        request_full(addr, "GET", &format!("{path}/content"), &token, &[], &[]).unwrap();
+    assert_eq!(status, 200);
+    assert_eq!(bytes, JPEG);
+    assert!(image_head
+        .to_ascii_lowercase()
+        .contains("content-type: image/jpeg"));
+    assert_ne!(jpeg_tag, first_tag);
+    assert_eq!(
+        request(
+            addr,
+            "PUT",
+            &path,
+            &token,
+            &[
+                ("Idempotency-Key", "stale-artwork"),
+                ("If-Match", &first_tag)
+            ],
+            WEBP
+        )
+        .unwrap()
+        .0,
+        412
+    );
+    assert_eq!(
+        request(
+            addr,
+            "GET",
+            &format!("{second_path}/content"),
+            &token,
+            &[],
+            &[]
+        )
+        .unwrap()
+        .1,
+        PNG
+    );
+    let (status, body, head) = request_full(
+        addr,
+        "PUT",
+        &path,
+        &token,
+        &[("Idempotency-Key", "artwork-webp"), ("If-Match", &jpeg_tag)],
+        WEBP,
+    )
+    .unwrap();
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["mimeType"],
+        "image/webp"
+    );
+    let webp_tag = response_etag(&head);
+    let (status, bytes, image_head) =
+        request_full(addr, "GET", &format!("{path}/content"), &token, &[], &[]).unwrap();
+    assert_eq!(status, 200);
+    assert_eq!(bytes, WEBP);
+    assert!(image_head
+        .to_ascii_lowercase()
+        .contains("content-type: image/webp"));
+    assert_eq!(
+        request(
+            addr,
+            "DELETE",
+            &path,
+            &token,
+            &[("If-Match", &jpeg_tag)],
+            &[]
+        )
+        .unwrap()
+        .0,
+        412
+    );
+    assert_eq!(
+        request(
+            addr,
+            "DELETE",
+            &path,
+            &token,
+            &[("If-Match", &webp_tag)],
+            &[]
+        )
+        .unwrap()
+        .0,
+        204
+    );
+    assert_eq!(
+        request(addr, "GET", &path, &token, &[], &[]).unwrap().0,
+        404
+    );
+    assert_eq!(
+        request(
+            addr,
+            "GET",
+            &format!("{second_path}/content"),
+            &token,
+            &[],
+            &[]
+        )
+        .unwrap()
+        .1,
+        PNG
+    );
+    let (status, body) = request(
+        addr,
+        "POST",
+        "/api/v1/backups",
+        &token,
+        &[("Idempotency-Key", "artwork-backup")],
+        &[],
+    )
+    .unwrap();
+    assert_eq!(status, 202, "{}", String::from_utf8_lossy(&body));
+    let operation: Value = serde_json::from_slice(&body).unwrap();
+    let operation_id = operation["id"].as_str().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let backup_id = loop {
+        let (status, body) = request(
+            addr,
+            "GET",
+            &format!("/api/v1/operations/{operation_id}"),
+            &token,
+            &[],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(status, 200);
+        let state: Value = serde_json::from_slice(&body).unwrap();
+        if state["status"] == "Completed" {
+            break state["backupId"].as_str().unwrap().to_owned();
+        }
+        assert_ne!(state["status"], "Failed", "{state}");
+        assert!(Instant::now() < deadline, "backup timed out");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let backup_dir = dir.path().join("crash/backups").join(&backup_id);
+    let manifest: Value =
+        serde_json::from_slice(&fs::read(backup_dir.join("manifest.json")).unwrap()).unwrap();
+    let png_digest = format!("{:x}", Sha256::digest(PNG));
+    assert!(manifest["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|member| member["sha256"] == png_digest));
+    let app_path = format!("/api/v1/apps/{second}");
+    let (status, _, app_head) = request_full(addr, "GET", &app_path, &token, &[], &[]).unwrap();
+    assert_eq!(status, 200);
+    let app_tag = response_etag(&app_head);
+    let (status, body) = request(
+        addr,
+        "DELETE",
+        &app_path,
+        &token,
+        &[
+            ("Idempotency-Key", "delete-artwork-app"),
+            ("If-Match", &app_tag),
+        ],
+        &[],
+    )
+    .unwrap();
+    assert_eq!(status, 202, "{}", String::from_utf8_lossy(&body));
+    let deletion: Value = serde_json::from_slice(&body).unwrap();
+    let deletion_id = deletion["id"].as_str().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let (_, body) = request(
+            addr,
+            "GET",
+            &format!("/api/v1/operations/{deletion_id}"),
+            &token,
+            &[],
+            &[],
+        )
+        .unwrap();
+        let status: Value = serde_json::from_slice(&body).unwrap();
+        if status["status"] == "Completed" {
+            break;
+        }
+        assert_ne!(status["status"], "Failed", "{status}");
+        assert!(
+            Instant::now() < deadline,
+            "artwork deletion timed out: {status}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    for bytes in [PNG, JPEG, WEBP] {
+        let digest = format!("{:x}", Sha256::digest(bytes));
+        assert!(
+            !dir.path()
+                .join("crash/cas")
+                .join(&digest[..2])
+                .join(&digest)
+                .exists(),
+            "unreferenced artwork CAS object remains: {digest}"
+        );
+    }
+    drop(server);
+    let restored = tempfile::tempdir().unwrap();
+    init_local(restored.path(), "crash", LocalMode::Dev).unwrap();
+    app_depot_infrastructure::restore::restore(&backup_dir, &restored.path().join("crash"), true)
+        .await
+        .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let restored_addr = listener.local_addr().unwrap();
+    drop(listener);
+    let restored_server = start(restored.path(), restored_addr);
+    assert_eq!(
+        request(
+            restored_addr,
+            "GET",
+            &format!("{second_path}/content"),
+            &token,
+            &[],
+            &[]
+        )
+        .unwrap()
+        .1,
+        PNG
+    );
+    assert_eq!(
+        request(restored_addr, "GET", &path, &token, &[], &[])
+            .unwrap()
+            .0,
+        404
+    );
+    drop(restored_server);
 }
 
 fn start_production(
@@ -637,6 +1168,113 @@ async fn acknowledged_range_survives_real_process_kill() {
     assert_eq!(status, 200);
     assert_eq!(
         request(addr, "GET", &app_path, "", &[], &[]).unwrap().0,
+        200
+    );
+    let artwork_path = format!("{app_path}/artwork/steam.hero");
+    let artwork_bytes = include_bytes!("fixtures/artwork.png");
+    assert_eq!(
+        request(
+            addr,
+            "PUT",
+            &artwork_path,
+            &token,
+            &[
+                ("Idempotency-Key", "public-artwork"),
+                ("If-None-Match", "*")
+            ],
+            artwork_bytes
+        )
+        .unwrap()
+        .0,
+        200
+    );
+    assert_eq!(
+        request(
+            addr,
+            "GET",
+            &format!("{artwork_path}/content"),
+            &outsider_token,
+            &[],
+            &[]
+        )
+        .unwrap()
+        .1,
+        artwork_bytes
+    );
+    assert_eq!(
+        request(
+            addr,
+            "GET",
+            &format!("{artwork_path}/content"),
+            "",
+            &[],
+            &[]
+        )
+        .unwrap()
+        .1,
+        artwork_bytes
+    );
+    let (_, _, public_artwork_head) =
+        request_full(addr, "GET", &artwork_path, &outsider_token, &[], &[]).unwrap();
+    let public_artwork_tag = response_etag(&public_artwork_head);
+    assert_eq!(
+        request(
+            addr,
+            "PUT",
+            &artwork_path,
+            &outsider_token,
+            &[
+                ("Idempotency-Key", "reader-cannot-edit-artwork"),
+                ("If-Match", &public_artwork_tag)
+            ],
+            include_bytes!("fixtures/artwork.jpg")
+        )
+        .unwrap()
+        .0,
+        403
+    );
+    let (_, _, settings_head) = request_full(addr, "GET", settings_path, &token, &[], &[]).unwrap();
+    let settings_tag = response_etag(&settings_head);
+    assert_eq!(
+        request(
+            addr,
+            "PATCH",
+            settings_path,
+            &token,
+            &[
+                ("Content-Type", "application/json"),
+                ("If-Match", &settings_tag)
+            ],
+            br#"{"anonymousReadEnabled":false}"#
+        )
+        .unwrap()
+        .0,
+        200
+    );
+    assert_eq!(
+        request(
+            addr,
+            "GET",
+            &format!("{artwork_path}/content"),
+            "",
+            &[],
+            &[]
+        )
+        .unwrap()
+        .0,
+        401
+    );
+    assert_eq!(
+        request(
+            addr,
+            "GET",
+            &format!("{artwork_path}/content"),
+            &outsider_token,
+            &[],
+            &[]
+        )
+        .unwrap()
+        .0,
         200
     );
 

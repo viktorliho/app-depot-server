@@ -194,6 +194,7 @@ export function AppShell({ app, children }: { app?: DepotApp; children: ReactNod
     catch (error) { setLogoutError(error) }
   }
   const links = app ? [{ to: `/apps/${app.id}`, label: 'Overview', end: true }, { to: `/apps/${app.id}/releases`, label: 'Releases', end: false },
+    { to: `/apps/${app.id}/artwork`, label: 'Artwork', end: false },
     { to: `/apps/${app.id}/channels`, label: 'Channels', end: false }, { to: `/apps/${app.id}/declarations`, label: 'Declarations', end: false },
     { to: `/apps/${app.id}/settings`, label: 'Settings', end: false }]
     : [{ to: '/', label: 'Overview', end: true }, { to: '/apps', label: 'Applications', end: false }]

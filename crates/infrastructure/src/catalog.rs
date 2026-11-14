@@ -29,6 +29,14 @@ pub enum CatalogError {
     PreconditionRequired,
     #[error("stale ETag")]
     StaleEtag,
+    #[error("invalid image")]
+    InvalidImage,
+    #[error("unsupported image format")]
+    UnsupportedImage,
+    #[error("artwork exceeds resource limits")]
+    ImageTooLarge,
+    #[error("storage unavailable")]
+    Storage,
     #[error(transparent)]
     Sql(#[from] sqlx::Error),
     #[error(transparent)]
@@ -819,6 +827,8 @@ async fn delete_resource(
         }
     }
     if kind == "DeleteApp" {
+        sqlx::query("INSERT OR IGNORE INTO deletion_cas(operation_id, digest) SELECT ?, digest FROM artwork_bindings WHERE app_id=?")
+            .bind(&operation_id).bind(id).execute(&mut *tx).await?;
         sqlx::query("DELETE FROM channels WHERE app_id=?")
             .bind(id)
             .execute(&mut *tx)
@@ -857,9 +867,9 @@ async fn delete_resource(
             .bind(id)
             .execute(&mut *tx)
             .await?;
-        sqlx::query("INSERT INTO idempotency_tombstones(principal_id, action, key, input_hash, created_at) SELECT principal_id, action, key, input_hash, ? FROM idempotency_bindings WHERE result_id=? AND action='CreateApp'")
+        sqlx::query("INSERT INTO idempotency_tombstones(principal_id, action, key, input_hash, created_at) SELECT principal_id, action, key, input_hash, ? FROM idempotency_bindings WHERE result_id=? AND action IN ('CreateApp', 'ArtworkPut')")
             .bind(time).bind(id).execute(&mut *tx).await?;
-        sqlx::query("DELETE FROM idempotency_bindings WHERE result_id=? AND action='CreateApp'")
+        sqlx::query("DELETE FROM idempotency_bindings WHERE result_id=? AND action IN ('CreateApp', 'ArtworkPut')")
             .bind(id)
             .execute(&mut *tx)
             .await?;

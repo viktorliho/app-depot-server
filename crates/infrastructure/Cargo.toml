@@ -21,6 +21,7 @@ uuid = { version = "=1.16.0", features = ["v4"] }
 hex = "0.4"
 flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
 crc32fast = "1.5"
+image = { version = "=0.25.8", default-features = false, features = ["png", "jpeg", "webp"] }
 
 [dev-dependencies]
 tempfile = "3"
