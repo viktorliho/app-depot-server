@@ -6,7 +6,7 @@ import { apiRequest, idempotencyKey, jsonBody, resource, type Artifact, type Ass
 import { ActionLink, EmptyState, LoadingState, PageHeader, ProblemNotice, StatusBadge, TechnicalDetails } from './components'
 import { useAuth } from './portal'
 import { useResource } from './use-resource'
-import { StandardMetadataForm, type MetadataScope } from './metadata'
+import { StandardMetadataForm, supportsStandardFields, type MetadataScope } from './metadata'
 
 const enc = encodeURIComponent
 const canManage = (app: DepotApp, user: { id: string; serverAdmin: boolean }) => user.serverAdmin || user.id === app.ownerId
@@ -143,8 +143,12 @@ export function DeclarationEditor({ path, editable, title, scope }: { path: stri
     ? apiRequest<Page<DeclarationRevision>>(`${path}/revisions?pageSize=10${cursor ? `&cursor=${enc(cursor)}` : ''}`, { authenticated: true, signal }).then(result => result.value)
     : Promise.resolve({ items: [], nextCursor: null }))
   const [selected, setSelected] = useState<DeclarationRevision>()
-  const [editor, setEditor] = useState<'json' | 'standard'>('json')
-  useEffect(() => { if (current.value) { setText(JSON.stringify(current.value.value.data, null, 2)); setTextRevision(current.value.value.revisionId) } }, [current.value?.value.revisionId])
+  const [editor, setEditor] = useState<'json' | 'standard'>('standard')
+  useEffect(() => { if (current.value) {
+    const value = JSON.stringify(current.value.value.data, null, 2)
+    setText(value); setTextRevision(current.value.value.revisionId)
+    if (!supportsStandardFields(value, scope)) setEditor('json')
+  } }, [current.value?.value.revisionId, scope])
   async function put(data: unknown) {
     setBusy(true); setError(undefined); setMessage('')
     try {
@@ -163,14 +167,15 @@ export function DeclarationEditor({ path, editable, title, scope }: { path: stri
   }
   return <section className="panel"><h2>{title}</h2>
     {current.loading ? <LoadingState /> : current.error ? <ProblemNotice error={current.error} retry={current.retry} /> : <>
-      <p className="subtle">Arbitrary JSON data remains available. An explicit <code>null</code> is different from an absent value.</p>
-      <div className="form-actions section-action"><button className="button button-secondary" aria-pressed={editor === 'standard'} onClick={() => setEditor('standard')}>Standard fields</button>
-        <button className="button button-secondary" aria-pressed={editor === 'json'} onClick={() => setEditor('json')}>JSON editor</button></div>
-      {editor === 'standard' ? <StandardMetadataForm key={current.value!.value.revisionId} scope={scope}
+      <p className="subtle">Standard fields are optional. Advanced JSON supports every valid value, including <code>null</code>; an explicit null differs from absent data.</p>
+      {!supportsStandardFields(textRevision === current.value!.value.revisionId ? text : JSON.stringify(current.value!.value.data, null, 2), scope) && <p role="status">This declaration cannot be edited as standard fields. Its value is preserved in Advanced JSON.</p>}
+      <div className="form-actions section-action"><button className="button button-secondary" aria-pressed={editor === 'standard'} disabled={!supportsStandardFields(textRevision === current.value!.value.revisionId ? text : JSON.stringify(current.value!.value.data, null, 2), scope)} onClick={() => setEditor('standard')}>Standard fields</button>
+        <button className="button button-secondary" aria-pressed={editor === 'json'} onClick={() => setEditor('json')}>Advanced JSON</button></div>
+      <div hidden={editor !== 'standard'}><StandardMetadataForm key={current.value!.value.revisionId} scope={scope}
         documentText={textRevision === current.value!.value.revisionId ? text : JSON.stringify(current.value!.value.data, null, 2)}
-        editable={editable} busy={busy} onSave={put} />
-        : <form className="form-stack" onSubmit={save}><label>Current JSON value<textarea rows={8} className="json-editor" value={text} onChange={event => setText(event.target.value)} readOnly={!editable} spellCheck={false} /></label>
-          {editable && <button className="button button-primary" disabled={busy}>{busy ? 'Saving…' : 'Save new revision'}</button>}</form>}
+        editable={editable} busy={busy} onSave={put} /></div>
+      <div hidden={editor !== 'json'}><form className="form-stack" onSubmit={save}><label>Current JSON value<textarea rows={8} className="json-editor" value={text} onChange={event => setText(event.target.value)} readOnly={!editable} spellCheck={false} /></label>
+          {editable && <button className="button button-primary" disabled={busy}>{busy ? 'Saving…' : 'Save new revision'}</button>}</form></div>
       {error !== undefined && <ProblemNotice error={error} />}{message && <Notice text={message} />}
       <TechnicalDetails><code>Current revision: {current.value!.value.revisionId}</code></TechnicalDetails>
       <button className="button button-secondary section-action" onClick={() => setHistoryOpen(value => !value)}>{historyOpen ? 'Hide revision history' : 'Show revision history'}</button>
@@ -204,7 +209,7 @@ function ArtifactRow({ appId, association, editable, removable, onRemoved }: { a
   return <section className="panel"><h3>Artifact association</h3>
     {artifact.loading ? <LoadingState /> : artifact.error ? <ProblemNotice error={artifact.error} retry={artifact.retry} /> : <>
       <div className="identity-line"><StatusBadge value={artifact.value!.kind} />{artifact.value!.size != null && <span>{artifact.value!.size.toLocaleString()} bytes</span>}</div>
-      <Link className="button button-secondary" to={`/apps/${appId}/releases/${association.releaseId}/artifacts/${association.id}`}>Explore Artifact and entry points</Link>
+      <Link className="button button-primary" to={`/apps/${appId}/releases/${association.releaseId}/artifacts/${association.id}`}>Browse files and entry points</Link>
       <TechnicalDetails><dl className="facts"><div><dt>Artifact ID</dt><dd><code>{artifact.value!.id}</code></dd></div><div><dt>Association ID</dt><dd><code>{association.id}</code></dd></div></dl></TechnicalDetails>
       {removable && current.value && <div className="section-action"><ConfirmDialog label="Remove association" detail="Remove this Artifact from the Draft release? This revokes the association; immutable content may remain shared elsewhere." confirm="Remove association" onConfirm={remove} /></div>}
     </>}
@@ -273,14 +278,15 @@ export function ReleaseDetail() {
       <div className="form-actions section-action"><ActionLink to={`/apps/${app.id}/releases/${releaseId}/uploads/new`} secondary>Upload Artifact</ActionLink>
         {canPublish && <button className="button button-primary" onClick={() => void publish()} disabled={busy}>Publish release</button>}</div>
       {!canPublish && <p className="subtle">Current Publish permission is required to publish.</p>}</section>}
-    <section className="panel"><h2>Artifacts</h2>{associations.loading ? <LoadingState /> : associations.error ? <ProblemNotice error={associations.error} retry={associations.retry} /> : <>
+    <DeclarationEditor title="Release declarations" scope="release" path={`/releases/${releaseId}/declarations`} editable={allowed} />
+    <section className="panel"><h2>Contents / Artifacts</h2><p>Browse original files, download content and manage entry points for each Artifact.</p>{associations.loading ? <LoadingState /> : associations.error ? <ProblemNotice error={associations.error} retry={associations.retry} /> : <>
       {!associations.value!.items.length && <EmptyState title="No Artifacts associated" detail="Upload or associate an Artifact before publishing." />}
+      {associations.value!.items.length === 1 && !associations.value!.nextCursor && <p><Link className="button button-primary" to={`/apps/${app.id}/releases/${releaseId}/artifacts/${associations.value!.items[0].id}`}>Explore content</Link></p>}
       {associations.value!.items.map(item => <ArtifactRow key={item.id} appId={app.id} association={item} editable={allowed} removable={!!mutable} onRemoved={id => { setOperation(id); setRefresh(value => value + 1); current.retry() }} />)}
       {associations.value!.nextCursor && <button className="button button-secondary" onClick={() => setCursor(associations.value!.nextCursor!)}>Next Artifacts page</button>}
     </>}</section>
     {mutable && <section className="panel form-panel"><h2>Associate an existing Artifact</h2><p>Enter the identity of an Artifact already accessible to your account. Registration does not publish the Release.</p>
       <form className="form-stack" onSubmit={associate}><label>Artifact ID<input value={artifactId} onChange={event => setArtifactId(event.target.value)} required placeholder="adfile:sha256:… or adtree:v1:sha256:…" /></label><button className="button button-secondary" disabled={busy || !artifactId.trim()}>Associate Artifact</button></form></section>}
-    <DeclarationEditor title="Release declarations" scope="release" path={`/releases/${releaseId}/declarations`} editable={allowed} />
     <section className="panel"><h2>Combined declaration snapshot</h2>{snapshot.loading ? <LoadingState /> : snapshot.error ? <ProblemNotice error={snapshot.error} retry={snapshot.retry} /> : <pre className="json-preview">{JSON.stringify(snapshot.value, null, 2)}</pre>}</section>
     {allowed && <section className="panel"><h2>Permanent deletion</h2><p>Deleting this Release revokes access and starts asynchronous cleanup. This cannot be undone.</p><ConfirmDialog label="Delete release" detail="Permanently delete this Release and its Artifact associations? Shared immutable content may remain available through other releases." confirm="Delete release" onConfirm={remove} /></section>}
   </>

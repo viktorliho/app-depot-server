@@ -3,12 +3,12 @@ import { useState, type FormEvent } from 'react'
 export type MetadataScope = 'app' | 'release' | 'association'
 
 type Draft = {
-  summary: string; description: string; kind: string; tags: string
+  summary: string; description: string; kind: string; developer: string; publisher: string; homepageUrl: string; license: string; tags: string; categories: string
   notes: string; platforms: string; runtimeName: string; runtimeVersion: string
   label: string; purpose: string
 }
 
-const empty: Draft = { summary: '', description: '', kind: '', tags: '', notes: '', platforms: '',
+const empty: Draft = { summary: '', description: '', kind: '', developer: '', publisher: '', homepageUrl: '', license: '', tags: '', categories: '', notes: '', platforms: '',
   runtimeName: '', runtimeVersion: '', label: '', purpose: '' }
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
 
@@ -41,6 +41,9 @@ function readDraft(text: string, scope: MetadataScope): Draft {
   if (scope === 'app') {
     draft.summary = readString(block, 'summary'); draft.description = readString(block, 'description')
     draft.kind = readString(block, 'kind'); draft.tags = readList(block, 'tags')
+    draft.developer = readString(block, 'developer'); draft.publisher = readString(block, 'publisher')
+    draft.homepageUrl = readString(block, 'homepageUrl'); draft.license = readString(block, 'license')
+    draft.categories = readList(block, 'categories')
   } else if (scope === 'release') {
     draft.notes = readString(block, 'notes'); draft.platforms = readList(block, 'platforms')
     if (block.runtime !== undefined && !object(block.runtime)) throw new Error('appDepot.runtime must be an object to use standard fields.')
@@ -51,6 +54,10 @@ function readDraft(text: string, scope: MetadataScope): Draft {
     draft.purpose = readString(block, 'purpose')
   }
   return draft
+}
+
+export function supportsStandardFields(text: string, scope: MetadataScope): boolean {
+  try { readDraft(text, scope); return true } catch { return false }
 }
 
 function optionalString(value: string, label: string, max: number, multiline = false): string | undefined {
@@ -76,6 +83,17 @@ function optionalList(value: string, label: string): string[] | undefined {
   return items
 }
 
+function optionalHomepage(value: string): string | undefined {
+  const url = optionalString(value, 'Homepage URL', 2048)
+  if (!url) return undefined
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') throw new Error()
+    if (!parsed.hostname || parsed.username || parsed.password) throw new Error()
+  } catch { throw new Error('Homepage URL must be an absolute HTTP or HTTPS URL without credentials.') }
+  return url
+}
+
 function assign(block: Record<string, unknown>, name: string, value: unknown) {
   if (value === undefined) delete block[name]
   else block[name] = value
@@ -90,7 +108,12 @@ function build(text: string, scope: MetadataScope, draft: Draft): Record<string,
     assign(block, 'summary', optionalString(draft.summary, 'Summary', 280))
     assign(block, 'description', optionalString(draft.description, 'Description', 10000, true))
     assign(block, 'kind', optionalString(draft.kind, 'Kind', 80))
+    assign(block, 'developer', optionalString(draft.developer, 'Developer', 160))
+    assign(block, 'publisher', optionalString(draft.publisher, 'Publisher', 160))
+    assign(block, 'homepageUrl', optionalHomepage(draft.homepageUrl))
+    assign(block, 'license', optionalString(draft.license, 'License', 160))
     assign(block, 'tags', optionalList(draft.tags, 'Tags'))
+    assign(block, 'categories', optionalList(draft.categories, 'Categories'))
   } else if (scope === 'release') {
     assign(block, 'notes', optionalString(draft.notes, 'Release notes', 10000, true))
     assign(block, 'platforms', optionalList(draft.platforms, 'Platforms'))
@@ -118,10 +141,10 @@ export function StandardMetadataForm({ scope, documentText, editable, busy, onSa
   })
   const [draft, setDraft] = useState(initial.draft)
   const [error, setError] = useState(initial.error)
-  function field(name: keyof Draft, label: string, multiline = false) {
+  function field(name: keyof Draft, label: string, multiline = false, type = 'text') {
     return <label>{label}{multiline
       ? <textarea rows={name === 'description' || name === 'notes' ? 5 : 3} value={draft[name]} readOnly={!editable} onChange={event => setDraft(current => ({ ...current, [name]: event.target.value }))} />
-      : <input value={draft[name]} readOnly={!editable} onChange={event => setDraft(current => ({ ...current, [name]: event.target.value }))} />}</label>
+      : <input type={type} value={draft[name]} readOnly={!editable} onChange={event => setDraft(current => ({ ...current, [name]: event.target.value }))} />}</label>
   }
   function submit(event: FormEvent) {
     event.preventDefault(); setError('')
@@ -130,9 +153,12 @@ export function StandardMetadataForm({ scope, documentText, editable, busy, onSa
   }
   if (initial.error) return <p role="alert">{initial.error}</p>
   return <form className="form-stack form-panel" onSubmit={submit}>
-    <p className="subtle">Every field is optional. Saving creates a declaration revision and preserves other JSON properties. Switching editors discards unsaved standard-field changes. This form does not select files or execute content.</p>
-    {scope === 'app' && <>{field('summary', 'Summary')}{field('description', 'Description', true)}{field('kind', 'Kind (optional free-form label)')}{field('tags', 'Tags (one per line)', true)}</>}
-    {scope === 'release' && <>{field('notes', 'Release notes', true)}{field('platforms', 'Platforms (one per line)', true)}{field('runtimeName', 'Runtime name')}{field('runtimeVersion', 'Runtime version')}</>}
+    <p className="subtle">Every field is optional. Saving creates a declaration revision and preserves other JSON properties. This form does not select files or execute content.</p>
+    {scope === 'app' && <>{field('summary', 'Summary')}{field('description', 'Description', true)}
+      <label htmlFor="standard-kind">Kind</label><select id="standard-kind" value={['', 'Game', 'Application', 'Tool', 'Library', 'Content', 'Other'].includes(draft.kind) ? draft.kind : 'custom'} onChange={event => setDraft(current => ({ ...current, kind: event.target.value === 'custom' ? 'Custom' : event.target.value }))}><option value="">Unspecified</option>{['Game', 'Application', 'Tool', 'Library', 'Content', 'Other'].map(value => <option key={value}>{value}</option>)}<option value="custom">Custom…</option></select>
+      {!['', 'Game', 'Application', 'Tool', 'Library', 'Content', 'Other'].includes(draft.kind) && field('kind', 'Custom kind')}
+      {field('developer', 'Developer')}{field('publisher', 'Publisher')}{field('homepageUrl', 'Homepage URL', false, 'url')}{field('license', 'License')}{field('tags', 'Tags (one per line)', true)}{field('categories', 'Categories (one per line)', true)}</>}
+    {scope === 'release' && <>{field('notes', 'Release notes', true)}<fieldset><legend>Target platforms (optional)</legend><p className="subtle">Select useful presets or add one platform per line. Leave empty for unspecified.</p><div className="form-actions">{['windows/x86_64', 'linux/x86_64', 'linux/aarch64', 'macos/aarch64', 'macos/x86_64'].map(value => <label key={value}><input type="checkbox" checked={draft.platforms.split('\n').includes(value)} disabled={!editable} onChange={event => setDraft(current => ({ ...current, platforms: (event.target.checked ? [...current.platforms.split('\n').filter(Boolean), value] : current.platforms.split('\n').filter(item => item !== value)).join('\n') }))} />{value}</label>)}</div>{field('platforms', 'Platforms (one per line; custom values allowed)', true)}</fieldset>{field('runtimeName', 'Runtime name')}{field('runtimeVersion', 'Runtime version')}</>}
     {scope === 'association' && <>{field('label', 'Artifact label')}{field('description', 'Description', true)}{field('purpose', 'Purpose')}</>}
     {error && <p role="alert">{error}</p>}
     {editable && <button className="button button-primary" disabled={busy}>{busy ? 'Saving…' : 'Save standard metadata'}</button>}

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useOutletContext, useSearchParams } from 'react-router'
-import { apiRequest, idempotencyKey, type AppPage, type DepotApp, type Diagnostics, type ReleasePage } from './api'
+import { apiRequest, idempotencyKey, type AppPage, type Declaration, type DepotApp, type Diagnostics, type ReleasePage } from './api'
 import { ActionLink, EmptyState, LoadingState, PageHeader, ProblemNotice, StatusBadge, TechnicalDetails } from './components'
 import { AppIdentity, useAuth } from './portal'
 import { useResource } from './use-resource'
@@ -82,8 +82,15 @@ export function ApplicationOverview() {
   const { state } = useAuth()
   const canManage = state.session!.user.serverAdmin || state.session!.user.id === app.ownerId
   const releases = useResource(`releases-overview:${app.id}`, signal => apiRequest<ReleasePage>(`/apps/${app.id}/releases?pageSize=5`, { signal, authenticated: true }).then(result => result.value))
+  const declaration = useResource(`app-overview-declaration:${app.id}`, signal => apiRequest<Declaration>(`/apps/${app.id}/declarations`, { signal, authenticated: true }).then(result => result.value))
+  const data = declaration.value?.data
+  const standard = data && typeof data === 'object' && !Array.isArray(data) && 'appDepot' in data && data.appDepot && typeof data.appDepot === 'object' && !Array.isArray(data.appDepot) ? data.appDepot as Record<string, unknown> : null
+  const metadata = standard ? (['kind', 'summary', 'description', 'developer', 'publisher', 'homepageUrl', 'license', 'tags', 'categories'] as const)
+    .map(key => ({ key, value: Array.isArray(standard[key]) ? (standard[key] as unknown[]).filter(value => typeof value === 'string').join(', ') : standard[key] }))
+    .filter(field => typeof field.value === 'string' && field.value.length) : []
   return <><PageHeader title={app.name} description="Application overview" actions={canManage ? <ActionLink to={`/apps/${app.id}/releases/new`}>Create Draft release</ActionLink> : undefined} />
     <section className="panel"><div className="panel-heading"><h2>Publication and access</h2><Link to={`/apps/${app.id}/artwork`}>Manage artwork →</Link></div><div className="app-overview-identity"><ArtworkThumbnail app={app} /><div><AppIdentity app={app} /><p>A Published release can still belong to a Private application. Visibility and release state are separate.</p></div></div><TechnicalDetails><dl className="facts"><div><dt>Application ID</dt><dd><code>{app.id}</code></dd></div><div><dt>Slug</dt><dd><code>{app.slug}</code></dd></div><div><dt>Owner ID</dt><dd><code>{app.ownerId}</code></dd></div></dl></TechnicalDetails></section>
+    <section className="panel"><div className="panel-heading"><h2>Application metadata</h2><Link to={`/apps/${app.id}/declarations`}>{canManage ? 'Edit metadata →' : 'View metadata →'}</Link></div>{declaration.loading ? <LoadingState label="Loading metadata…" /> : declaration.error ? <ProblemNotice error={declaration.error} retry={declaration.retry} /> : metadata.length ? <dl className="facts">{metadata.map(field => <div key={field.key}><dt>{field.key === 'homepageUrl' ? 'Homepage URL' : field.key[0].toUpperCase() + field.key.slice(1)}</dt><dd>{String(field.value)}</dd></div>)}</dl> : <p className="subtle">No standard metadata yet. Metadata is optional and can be edited without changing original Artifacts.</p>}</section>
     <section className="panel"><div className="panel-heading"><h2>Releases</h2><Link to={`/apps/${app.id}/releases`}>View all →</Link></div>{releases.loading ? <LoadingState label="Loading releases…" /> : releases.error ? <ProblemNotice error={releases.error} retry={releases.retry} /> : releases.value!.items.length ? <ul className="compact-list">{releases.value!.items.map(release => <li key={release.id}><Link to={`/apps/${app.id}/releases/${release.id}`}>{release.version || 'Unversioned release'}</Link><StatusBadge value={release.state} /></li>)}</ul> : <EmptyState title="No releases yet" detail={canManage ? 'Create a Draft release or start by uploading a file.' : 'This application has no releases.'} action={canManage ? <div className="form-actions"><ActionLink to={`/apps/${app.id}/releases/new`}>Create Draft release</ActionLink><ActionLink to={`/apps/${app.id}/uploads/new`} secondary>Add release from file</ActionLink></div> : undefined} />}</section>
   </>
 }

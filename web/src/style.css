@@ -117,6 +117,10 @@ code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; overflow-
 .artwork-card p { overflow-wrap: anywhere; }
 .artwork-preview { width: 96px; height: 96px; display: grid; place-items: center; overflow: hidden; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-muted); color: var(--muted); font-size: .8rem; text-align: center; }
 .artwork-preview img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.artwork-pick { cursor: pointer; padding: 0; font: inherit; }
+.artwork-pick:hover { border-color: var(--accent); }
+.artwork-pick:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+.artwork-confirm-preview { max-width: min(100%, 420px); max-height: 300px; object-fit: contain; display: block; margin: 16px 0; background: var(--surface-muted); border: 1px solid var(--border); }
 .facts { display: grid; gap: 10px; margin: 0; }
 .facts > div { display: flex; justify-content: space-between; gap: 16px; }
 .facts dt { color: var(--muted); }
