@@ -27,20 +27,34 @@ export function ConfirmDialog({ label, detail, confirm, onConfirm }: { label: st
     </dialog></>
 }
 
-export function OperationNotice({ id }: { id: string }) {
+export function OperationNotice({ id, compact = false }: { id: string; compact?: boolean }) {
   const operation = useResource(`operation:${id}`, signal => apiRequest<Operation>(`/operations/${id}`, { authenticated: true, signal }).then(result => result.value))
+  const polls = useRef(0)
+  useEffect(() => { polls.current = 0 }, [id])
   useEffect(() => {
-    if (!operation.value || operation.value.status === 'Completed' || operation.value.status === 'Failed') return
-    const timer = setTimeout(operation.retry, 1000)
+    if (!operation.value || operation.value.status === 'Completed' || operation.value.status === 'Failed' || polls.current >= 120) return
+    const timer = setTimeout(() => { polls.current++; operation.retry() }, 1000)
     return () => clearTimeout(timer)
   }, [operation.value?.status, operation.value?.id, operation.retry])
   if (operation.loading) return <LoadingState label="Checking operation…" />
   if (operation.error) return <ProblemNotice error={operation.error} retry={operation.retry} />
   const value = operation.value!
-  return <div className="panel" role="status"><h2>{value.kind} operation</h2><StatusBadge value={value.status} />
-    {value.accessRevoked && <p>Access has been revoked. Physical cleanup: {value.physicalCleanup || 'pending'}.</p>}
-    {value.status === 'Failed' && <p>{value.problem?.title || 'The operation failed.'}</p>}
+  const labels: Record<Operation['kind'], string> = { Finalize: 'Finalize upload', CancelUpload: 'Cancel upload', DeleteApp: 'Delete application',
+    DeleteRelease: 'Delete release', DeleteAssociation: 'Remove artifact association', Backup: 'Backup' }
+  return <div className="panel" role="status"><h2>{labels[value.kind]} operation</h2><StatusBadge value={value.status} />
+    {value.kind.startsWith('Delete') && <p>{value.accessRevoked ? 'Access has been revoked.' : 'Access revocation is not yet confirmed.'} Physical cleanup: {value.physicalCleanup || 'Not started'}.</p>}
+    {value.kind === 'Backup' && <p>Backup output available now: {value.backupOutputAvailable ? 'Yes' : 'No'}. A historically Completed operation may have unavailable output after restore.</p>}
+    {value.kind === 'Backup' && value.backupId && value.backupOutputAvailable && <ActionLink to={`/admin/backups?backup=${value.backupId}`} secondary>Inspect backup</ActionLink>}
+    {value.kind === 'Finalize' && value.result?.phase === 'Completed' && value.result.appId && value.result.releaseId && <ActionLink to={`/apps/${value.result.appId}/releases/${value.result.releaseId}`} secondary>Open registered Release</ActionLink>}
+    {value.status === 'Failed' && <p>{value.problem?.title || 'The operation failed.'}{value.problem?.detail ? ` ${value.problem.detail}` : ''}</p>}
+    {polls.current >= 120 && value.status !== 'Completed' && value.status !== 'Failed' && <button className="button button-secondary" onClick={() => { polls.current = 0; operation.retry() }}>Check again</button>}
+    {!compact && <Link to={`/operations/${id}`}>Open operation page</Link>}
     <TechnicalDetails><code>{value.id}</code></TechnicalDetails></div>
+}
+
+export function OperationPage() {
+  const { id } = useParams()
+  return <><PageHeader title="Operation status" description="The Server reports this known operation ID. There is no global operation list." /><OperationNotice id={id!} compact /></>
 }
 
 export function AppSettings() {

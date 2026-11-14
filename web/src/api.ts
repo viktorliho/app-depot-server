@@ -17,8 +17,14 @@ export type DeclarationRevision = { id: string; createdAt: string; data: unknown
 export type DeclarationSnapshot = { releaseId: string; app: Declaration; release: Declaration; associations: { associationId: string; declaration: Declaration }[] }
 export type InventoryEntry = { type: 'File' | 'Directory'; path: string; fileId?: string | null; size?: number | null; sha256?: string | null; executable?: boolean | null; transferRequired?: boolean }
 export type UploadProgress = { ranges: { start: number; end: number }[]; nextCursor: string | null; progressVersion: number }
-export type Operation = { id: string; kind: string; status: 'Accepted' | 'Running' | 'Completed' | 'Failed'; accessRevoked?: boolean; physicalCleanup?: string; problem?: { title: string } }
-export type Diagnostics = { readiness: string; recovery: string; migration: string; storagePressure: string; activeUploads: number; activeTransfers: number; pendingCleanup: number; retryableCleanup: number; backupsRunning: number; backupsFailed: number }
+export type Operation = { id: string; kind: 'Finalize' | 'CancelUpload' | 'DeleteApp' | 'DeleteRelease' | 'DeleteAssociation' | 'Backup'; status: 'Accepted' | 'Running' | 'Completed' | 'Failed'; backupId?: string; backupOutputAvailable?: boolean; accessRevoked?: boolean; physicalCleanup?: string; result?: FinalizationResult | null; problem?: { title: string; detail?: string } | null }
+export type Diagnostics = { readiness: string; recovery: string; migration: string; storagePressure: string; windowSeconds: number; requestFailures: number; requestLatencyMsP95: number; activeUploads: number; activeTransfers: number; pendingCleanup: number; retryableCleanup: number; backupsRunning: number; backupsFailed: number }
+export type ServerSettings = { anonymousReadEnabled: boolean }
+export type TokenMetadata = { active: boolean; issuedAt: string | null }
+export type TokenIssue = { token: string; metadata: TokenMetadata }
+export type BackupSummary = { id: string; formatVersion: number; capturedAt: string; completedAt: string; memberCount: number; totalBytes: number }
+export type BackupMember = { entryId: string; kind: 'SqliteSnapshot' | 'CasObject'; relativePath: string; size: number; sha256: string }
+export type BackupManifest = { formatVersion: number; backupId: string; capturedAt: string; catalogFormatVersion: number; members: BackupMember[] }
 export type UploadSession = { id: string; operationId: string; file?: { fileId: string } | null; phase: string; inventoryComplete: boolean }
 export type FinalizationResult = { phase: string; appId?: string; releaseId?: string; artifactId?: string; associationId?: string; problem?: { title: string } }
 
@@ -75,10 +81,26 @@ export async function apiRequest<T>(path: string, options: Options = {}): Promis
   if (!response.ok) {
     const body = await response.json().catch(() => ({})) as { code?: string; title?: string; detail?: string }
     if (response.status === 401 && authenticated) window.dispatchEvent(new Event('app-depot-unauthorized'))
+    if (response.status === 403 && authenticated && /^\/(admin|users|settings|backups)(\/|$)/.test(path)) window.dispatchEvent(new Event('app-depot-permissions-changed'))
     throw new ApiError(response.status, body.code || 'request_failed', body.title || `Request failed (${response.status})`, body.detail)
   }
   const value = response.status === 204 ? undefined as T : await response.json() as T
   return { value, response }
+}
+
+export async function apiStream(path: string, signal?: AbortSignal): Promise<Response> {
+  let response: Response
+  try { response = await fetch(`/api/v1${path}`, { credentials: 'same-origin', cache: 'no-store', signal }) }
+  catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error
+    throw new ApiError(0, 'network_error', 'Network error')
+  }
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({})) as { code?: string; title?: string; detail?: string }
+    if (response.status === 401) window.dispatchEvent(new Event('app-depot-unauthorized'))
+    throw new ApiError(response.status, body.code || 'request_failed', body.title || `Request failed (${response.status})`, body.detail)
+  }
+  return response
 }
 
 export async function resource<T>(path: string, signal?: AbortSignal): Promise<{ value: T; etag: string }> {

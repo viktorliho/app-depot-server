@@ -36,6 +36,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     window.addEventListener('app-depot-unauthorized', unauthorized)
     return () => window.removeEventListener('app-depot-unauthorized', unauthorized)
   }, [])
+  useEffect(() => {
+    if (state.phase !== 'authenticated') return
+    let active = true
+    async function syncSession() {
+      try {
+        const session = (await apiRequest<BrowserSession>('/auth/sessions/current', { authenticated: true })).value
+        if (active) setState(current => current.phase === 'authenticated' &&
+          JSON.stringify(current.session?.user) === JSON.stringify(session.user) && current.session?.csrfToken === session.csrfToken
+          ? current : { phase: 'authenticated', session })
+      } catch { /* A 401 is handled by the shared unauthorized event; transient failures keep the current view. */ }
+    }
+    const visible = () => { if (document.visibilityState === 'visible') void syncSession() }
+    window.addEventListener('focus', syncSession)
+    window.addEventListener('app-depot-permissions-changed', syncSession)
+    document.addEventListener('visibilitychange', visible)
+    return () => { active = false; window.removeEventListener('focus', syncSession); window.removeEventListener('app-depot-permissions-changed', syncSession); document.removeEventListener('visibilitychange', visible) }
+  }, [state.phase])
   return <AuthContext.Provider value={{ state, refresh, signedIn: session => setState({ phase: 'authenticated', session }), signedOut: () => setState({ phase: 'guest' }) }}>{children}</AuthContext.Provider>
 }
 
@@ -84,6 +101,11 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   if (state.phase === 'setup') return <Navigate to="/setup" replace state={{ from: location.pathname + location.search }} />
   if (state.phase === 'guest') return <Navigate to="/login" replace state={{ from: location.pathname + location.search }} />
   return <>{children}</>
+}
+
+export function RequireAdmin() {
+  const { state } = useAuth()
+  return state.session?.user.serverAdmin ? <Outlet /> : <><PageHeader title="Access denied" /><ProblemNotice error={new Error('Server Admin permission is required for this area.')} /><ActionLink to="/" secondary>Server overview</ActionLink></>
 }
 
 export function AuthPage({ setup }: { setup: boolean }) {
@@ -181,12 +203,16 @@ export function AppShell({ app, children }: { app?: DepotApp; children: ReactNod
       <Link className="brand" to="/">App Depot <span>Portal</span></Link>
       <div className="workspace-switch">{app ? <><span className="eyebrow">APPLICATION WORKSPACE</span><strong title={app.name}>{app.name}</strong><Link to="/apps">← Switch application</Link></> : <><span className="eyebrow">SERVER WORKSPACE</span><strong>Server</strong></>}</div>
       <nav aria-label={app ? 'Application navigation' : 'Server navigation'}>{links.map(link => <NavLink key={link.to} to={link.to} end={link.end} className={({ isActive }) => `nav-link ${isActive ? 'nav-link-active' : ''}`}>{link.label}</NavLink>)}</nav>
+      {!app && session.user.serverAdmin && <nav aria-label="Server administration"><span className="eyebrow">ADMINISTRATION</span>{[
+        { to: '/admin/users', label: 'Users & Access' }, { to: '/admin/backups', label: 'Backups' },
+        { to: '/admin/diagnostics', label: 'Diagnostics' }, { to: '/admin/settings', label: 'Server Settings' }
+      ].map(link => <NavLink key={link.to} to={link.to} className={({ isActive }) => `nav-link ${isActive ? 'nav-link-active' : ''}`}>{link.label}</NavLink>)}</nav>}
       {!app && canCreate && <div className="sidebar-bottom"><Link to="/upload/new-app">Upload a new application</Link></div>}
     </aside>
     {menuOpen && <button className="nav-scrim" aria-label="Close navigation" onClick={() => { setMenuOpen(false); menuButton.current?.focus() }} />}
     <div className="main-column"><header className="topbar"><button ref={menuButton} className="menu-button" aria-label="Open navigation" aria-expanded={menuOpen} onClick={() => setMenuOpen(value => !value)}>☰</button>
       <div className="topbar-context">{app ? <><Link to="/apps">Applications</Link><span aria-hidden="true"> / </span><span>{app.name}</span></> : 'Server workspace'}</div>
-      <div className="topbar-actions"><ThemeButton /><details className="account-menu"><summary>{session.user.username}</summary><div><span>{session.user.serverAdmin ? 'Server Admin' : 'Member'}</span><button onClick={() => void logout()}>Sign out</button></div></details></div></header>
+      <div className="topbar-actions"><ThemeButton /><details className="account-menu"><summary>{session.user.username}</summary><div><span>{session.user.serverAdmin ? 'Server Admin' : 'Member'}</span><Link to="/account">Account</Link><button onClick={() => void logout()}>Sign out</button></div></details></div></header>
       <main id="main-content" tabIndex={-1} className="content">{logoutError !== undefined && <ProblemNotice error={logoutError} />}{children}</main>
     </div>
   </div>
