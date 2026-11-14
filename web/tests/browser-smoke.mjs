@@ -1,10 +1,10 @@
 import { chromium } from 'playwright-core'
 import { createHash, randomUUID } from 'node:crypto'
 import { execFileSync, spawn } from 'node:child_process'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 async function emptyRevisionIndex(page, path) {
@@ -29,6 +29,81 @@ async function associationWithRoot(page, releaseId, rootPath) {
     }
     throw new Error(`Artifact association for ${rootPath} is missing`)
   }, { releaseId, rootPath })
+}
+
+async function verifyRestoredSnapshot(preview, page, manifest, password, ids) {
+  const scratch = await mkdtemp(join(tmpdir(), 'app-depot-m10-restore-'))
+  const backupDir = join(scratch, 'portable-backup')
+  const restoredRoot = join(scratch, 'restored-data')
+  let restoredServer
+  try {
+    await mkdir(backupDir)
+    const signedCookie = (await page.context().cookies(preview.base)).find(cookie => cookie.name === 'ad_session')
+    if (!signedCookie) throw new Error('Admin cookie missing during backup export')
+    for (const member of manifest.members) {
+      if (!/^(catalog\.sqlite|cas\/[0-9a-f]{64})$/.test(member.relativePath)) throw new Error(`Unsafe portable backup path: ${member.relativePath}`)
+      const response = await fetch(`http://127.0.0.1:${preview.port}/api/v1/backups/${manifest.backupId}/entries/${encodeURIComponent(member.entryId)}`,
+        { headers: { Cookie: `ad_session=${signedCookie.value}` } })
+      if (!response.ok) throw new Error(`Backup member export failed: ${response.status}`)
+      const bytes = Buffer.from(await response.arrayBuffer())
+      if (bytes.length !== member.size || createHash('sha256').update(bytes).digest('hex') !== member.sha256) throw new Error(`Backup member integrity failed: ${member.relativePath}`)
+      await mkdir(dirname(join(backupDir, member.relativePath)), { recursive: true })
+      await writeFile(join(backupDir, member.relativePath), bytes)
+    }
+    await writeFile(join(backupDir, 'manifest.json'), JSON.stringify(manifest))
+    execFileSync(preview.binary, ['restore', '--backup-dir', backupDir, '--data-root', restoredRoot])
+    const listener = createServer()
+    await new Promise(resolve => listener.listen(0, '127.0.0.1', resolve))
+    const port = listener.address().port
+    await new Promise(resolve => listener.close(resolve))
+    const cleanEnvironment = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('APP_DEPOT_')))
+    restoredServer = spawn(preview.binary, ['serve', '--mode', 'production'], {
+      env: { ...cleanEnvironment, APP_DEPOT_DATA_ROOT: restoredRoot, APP_DEPOT_BIND: `127.0.0.1:${port}`, APP_DEPOT_ASSETS: join(preview.repository, 'web/dist') },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let errors = ''
+    restoredServer.stderr.on('data', chunk => { errors = (errors + chunk.toString()).slice(-2000) })
+    const rootUrl = `http://127.0.0.1:${port}`
+    const deadline = Date.now() + 15000
+    let ready = false
+    while (Date.now() < deadline) {
+      if (restoredServer.exitCode !== null) throw new Error(`Restored Server exited: ${errors}`)
+      try { if ((await fetch(`${rootUrl}/api/v1/health/ready`)).ok) { ready = true; break } } catch { /* startup */ }
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+    if (!ready) throw new Error(`Restored Server not ready: ${errors}`)
+    const login = await fetch(`${rootUrl}/api/v1/auth/sessions`, { method: 'POST', headers: { Origin: rootUrl, 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password }) })
+    if (!login.ok) throw new Error(`Restored Admin login failed: ${login.status}`)
+    const restoredCookie = login.headers.get('set-cookie')?.split(';')[0]
+    if (!restoredCookie) throw new Error('Restored Server did not issue a session')
+    const get = async path => {
+      const response = await fetch(`${rootUrl}/api/v1${path}`, { headers: { Cookie: restoredCookie } })
+      if (!response.ok) throw new Error(`Restored resource unavailable: ${path} (${response.status})`)
+      return response
+    }
+    const app = await (await get(`/apps/${ids.appId}/declarations`)).json()
+    const release = await (await get(`/releases/${ids.releaseId}/declarations`)).json()
+    const association = await (await get(`/associations/${ids.associationId}/declarations`)).json()
+    const artwork = await (await get(`/apps/${ids.appId}/artwork`)).json()
+    if (app.data.appDepot?.kind !== 'tool' || app.data.appDepot?.tags?.length !== 2 ||
+        release.data.appDepot?.platforms?.length !== 2 || association.data.appDepot?.entryPoints?.[0]?.target?.path !== 'browser-tree/nested/tree.txt' ||
+        artwork.items.length !== 3) throw new Error('Restored metadata, entry points or artwork bindings differ from source')
+    for (const item of artwork.items) {
+      const bytes = Buffer.from(await (await get(`/apps/${ids.appId}/artwork/${encodeURIComponent(item.role)}/content`)).arrayBuffer())
+      if (bytes.length !== item.size || createHash('sha256').update(bytes).digest('hex') !== item.digest) throw new Error(`Restored artwork bytes failed integrity: ${item.role}`)
+    }
+    const inventory = await (await get(`/artifacts/${encodeURIComponent(ids.artifactId)}/inventory?q=tree.txt`)).json()
+    const file = inventory.items.find(item => item.path === 'browser-tree/nested/tree.txt')
+    if (!file?.fileId) throw new Error('Restored original tree inventory is incomplete')
+    const original = Buffer.from(await (await get(`/artifacts/${encodeURIComponent(ids.artifactId)}/files/${encodeURIComponent(file.fileId)}`)).arrayBuffer())
+    if (createHash('sha256').update(original).digest('hex') !== file.sha256) throw new Error('Restored original Artifact bytes failed SHA-256')
+  } finally {
+    if (restoredServer && restoredServer.exitCode === null) {
+      restoredServer.kill('SIGTERM')
+      await new Promise(resolve => restoredServer.once('exit', resolve))
+    }
+    await rm(scratch, { recursive: true, force: true })
+  }
 }
 
 async function startLanPreview() {
@@ -196,6 +271,7 @@ try {
   await page.getByLabel('File', { exact: true }).setInputFiles({ name: 'draft.txt', mimeType: 'text/plain', buffer: Buffer.from('Draft') })
   await page.getByRole('button', { name: 'Save Draft' }).click()
   await page.getByText('Saved Draft for Portal Draft').waitFor({ timeout: 30000 })
+  let integratedIds
   if (preview) {
   await page.getByRole('link', { name: 'Open release' }).click()
   await page.waitForURL(/\/releases\/[0-9a-f-]{36}$/)
@@ -265,6 +341,12 @@ try {
   if ('kind' in optionalAppData.appDepot || 'tags' in optionalAppData.appDepot || optionalAppData.appDepot.extension !== 'kept') {
     throw new Error('Clearing optional fields did not remove only those fields')
   }
+  await appDeclarations.getByLabel('Kind (optional free-form label)').fill('tool')
+  await appDeclarations.getByLabel('Description', { exact: true }).fill('An integrated directory application')
+  await appDeclarations.getByLabel('Tags (one per line)').fill('utilities\nself-hosted')
+  const integratedMetadataSave = page.waitForResponse(response => response.url().endsWith(`/api/v1/apps/${draftId}/declarations`) && response.request().method() === 'PUT')
+  await appDeclarations.getByRole('button', { name: 'Save standard metadata' }).click()
+  if ((await integratedMetadataSave).status() !== 200) throw new Error('Integrated App metadata save failed')
   await page.goto(`${base}apps/${draftId}/releases/new`)
   await page.getByRole('heading', { name: 'Create Draft release' }).waitFor()
   await page.getByLabel('Version (optional)').fill('test-v1')
@@ -340,19 +422,25 @@ try {
     throw new Error('Standard association metadata was not saved')
   }
   await page.getByLabel('Current JSON value').last().fill('{"release":"data"}')
+  const releaseRawSave = page.waitForResponse(response => response.url().endsWith(`/api/v1/releases/${releaseId}/declarations`) && response.request().method() === 'PUT')
   await page.getByRole('button', { name: 'Save new revision' }).last().click()
+  const savedReleaseDocument = await (await releaseRawSave).json()
+  await page.getByRole('heading', { name: 'Release declarations' }).locator('..').locator('code').filter({ hasText: savedReleaseDocument.revisionId }).waitFor({ state: 'attached' })
   await page.getByText('Saved as a new declaration revision.').last().waitFor()
   const releaseDeclarations = page.getByRole('heading', { name: 'Release declarations' }).locator('..')
   await releaseDeclarations.getByRole('button', { name: 'Standard fields' }).click()
   await releaseDeclarations.getByLabel('Release notes').fill('Initial public content')
   await releaseDeclarations.getByLabel('Platforms (one per line)').fill('linux/amd64\nmacos/arm64')
   await releaseDeclarations.getByLabel('Runtime name').fill('optional-runtime')
+  const releaseDeclarationSave = page.waitForResponse(response => response.url().endsWith(`/api/v1/releases/${releaseId}/declarations`) && response.request().method() === 'PUT')
   await releaseDeclarations.getByRole('button', { name: 'Save standard metadata' }).click()
+  const releaseDeclarationResponse = await releaseDeclarationSave
+  if (releaseDeclarationResponse.status() !== 200) throw new Error(`Release declaration save failed: ${releaseDeclarationResponse.status()}`)
   await releaseDeclarations.getByText('Saved as a new declaration revision.').waitFor()
   const snapshot = await page.evaluate(async id => (await (await fetch(`/api/v1/releases/${id}/declaration-snapshot`)).json()), releaseId)
   if (snapshot.release.data.release !== 'data' || snapshot.release.data.appDepot?.platforms?.length !== 2 ||
       snapshot.release.data.appDepot?.runtime?.name !== 'optional-runtime' || snapshot.associations.length !== 2) {
-    throw new Error('Combined declaration snapshot is incomplete')
+    throw new Error(`Combined declaration snapshot is incomplete: ${JSON.stringify(snapshot)}`)
   }
   const treeRoot = join(preview.namespace, 'browser-tree')
   await mkdir(join(treeRoot, 'nested'), { recursive: true })
@@ -367,6 +455,8 @@ try {
   await page.getByText('Saved Draft for Portal Draft Edited').waitFor({ timeout: 30000 })
   await page.getByRole('link', { name: 'Open release' }).click()
   const treeAssociationId = await associationWithRoot(page, releaseId, 'browser-tree')
+  const treeArtifactId = await page.evaluate(async id => (await (await fetch(`/api/v1/associations/${id}`)).json()).artifactId, treeAssociationId)
+  integratedIds = { appId: draftId, releaseId, associationId: treeAssociationId, artifactId: treeArtifactId }
   const referenceStatuses = await page.evaluate(async id => {
     const points = ['browser-tree/nested/é漢字.txt', 'browser-tree/empty', 'missing.txt', '../escape'].map((path, index) => ({ id: `case-${index}`, target: { type: 'TreeFile', path } }))
     const response = await fetch(`/api/v1/associations/${id}/entry-points/validate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: { appDepot: { entryPoints: points } } }) })
@@ -478,6 +568,42 @@ try {
   await page.getByText('Entry points saved as a new declaration revision.').waitFor()
   const publishedEntry = await page.evaluate(async id => (await (await fetch(`/api/v1/associations/${id}/declarations`)).json()).data.appDepot.entryPoints[0], treeAssociationId)
   if (publishedEntry.label !== 'Published script' || publishedEntry.target.path !== 'browser-tree/nested/tree.txt') throw new Error('Published association declaration edit failed')
+  await page.goto(`${base}apps/${draftId}/artwork`)
+  await page.getByRole('heading', { name: 'Artwork', exact: true }).waitFor()
+  const artworkFixtures = {
+    png: new URL('../../crates/server/tests/fixtures/artwork.png', import.meta.url).pathname,
+    jpeg: new URL('../../crates/server/tests/fixtures/artwork.jpg', import.meta.url).pathname,
+    webp: new URL('../../crates/server/tests/fixtures/artwork.webp', import.meta.url).pathname,
+  }
+  for (const [role, fixture] of [['icon', 'png'], ['logo', 'webp'], ['steam.hero', 'jpeg']]) {
+    await page.getByLabel('Artwork role').selectOption(role)
+    await page.getByLabel('Image file').setInputFiles(artworkFixtures[fixture])
+    await page.getByRole('button', { name: 'Add artwork' }).click()
+    await page.getByText('Artwork added.').waitFor()
+  }
+  await page.getByLabel('Artwork role').selectOption('icon')
+  await page.getByRole('button', { name: 'Replace artwork' }).waitFor()
+  await page.getByLabel('Image file').setInputFiles(artworkFixtures.jpeg)
+  await page.getByRole('button', { name: 'Replace artwork' }).click()
+  await page.getByText('Artwork replaced.').waitFor()
+  const integratedArtwork = await page.evaluate(async id => (await (await fetch(`/api/v1/apps/${id}/artwork`)).json()).items, draftId)
+  if (integratedArtwork.length !== 3 || new Set(integratedArtwork.map(item => item.role)).size !== 3 ||
+      !['icon', 'logo', 'steam.hero'].every(role => integratedArtwork.some(item => item.role === role))) throw new Error('Artwork bindings were not current and unique by role')
+  const expectedIconDigest = createHash('sha256').update(await readFile(artworkFixtures.jpeg)).digest('hex')
+  if (integratedArtwork.find(item => item.role === 'icon').digest !== expectedIconDigest) throw new Error('Icon replacement did not select the new CAS content')
+  const iconBytes = await page.evaluate(async id => Array.from(new Uint8Array(await (await fetch(`/api/v1/apps/${id}/artwork/icon/content`)).arrayBuffer())), draftId)
+  if (createHash('sha256').update(Buffer.from(iconBytes)).digest('hex') !== expectedIconDigest) throw new Error('Current icon bytes differ from selected digest')
+  if (preview) await restartLanPreview(preview)
+  await page.reload()
+  await page.getByRole('heading', { name: 'Artwork', exact: true }).waitFor()
+  const afterRestart = await page.evaluate(async ({ appId, releaseId, associationId }) => {
+    const get = async path => (await (await fetch(`/api/v1${path}`)).json())
+    return { app: await get(`/apps/${appId}/declarations`), release: await get(`/releases/${releaseId}/declarations`),
+      association: await get(`/associations/${associationId}/declarations`), artwork: await get(`/apps/${appId}/artwork`) }
+  }, { appId: draftId, releaseId, associationId: treeAssociationId })
+  if (afterRestart.app.data.appDepot?.kind !== 'tool' || afterRestart.app.data.appDepot?.tags?.length !== 2 ||
+      afterRestart.release.data.appDepot?.platforms?.length !== 2 || afterRestart.association.data.appDepot?.entryPoints?.length !== 1 ||
+      afterRestart.artwork.items.length !== 3) throw new Error('Integrated App state did not survive restart')
   await page.goto(`${base}apps/${draftId}/releases/${firstReleaseId}`)
   await page.getByRole('button', { name: 'Publish release' }).click()
   await page.getByText('Release published. Artifact composition is now immutable.').waitFor()
@@ -600,6 +726,15 @@ try {
     throw new Error('Backup manifest is incomplete')
   }
   if (preview) {
+    await verifyRestoredSnapshot(preview, page, manifest, password, integratedIds)
+    const sourceState = await page.evaluate(async ({ appId, associationId }) => ({
+      app: await (await fetch(`/api/v1/apps/${appId}/declarations`)).json(),
+      association: await (await fetch(`/api/v1/associations/${associationId}/declarations`)).json(),
+      artwork: await (await fetch(`/api/v1/apps/${appId}/artwork`)).json(),
+    }), integratedIds)
+    if (sourceState.app.data.appDepot?.kind !== 'tool' || sourceState.association.data.appDepot?.entryPoints?.length !== 1 || sourceState.artwork.items.length !== 3) {
+      throw new Error('Source instance changed during isolated offline restore')
+    }
     await page.goto(`${base}apps/${draftId}/settings`)
     await page.getByRole('button', { name: 'Delete application' }).click()
     await page.getByRole('dialog', { name: 'Delete application' }).getByRole('button', { name: 'Delete application' }).click()
@@ -795,7 +930,7 @@ try {
   })
   await page.reload()
   await page.getByRole('heading', { name: 'Sign in' }).waitFor()
-  console.log('Browser smoke passed: setup, auth, App/Release management, File/Tree/ZIP Explorer and entry points, metadata, declarations, channels, deletion, administration, account, operations, LAN HTTP and backup')
+  console.log('Browser smoke passed: setup, auth, App/Release management, File/Tree/ZIP Explorer and entry points, metadata, artwork, declarations, channels, deletion, administration, account, operations, LAN HTTP, backup and isolated restore')
 } finally {
   await browser?.close()
   if (preview) {
