@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router'
 import { apiRequest, idempotencyKey, jsonBody, resource, type Artifact, type Association, type Channel, type ChannelMove,
-  type Declaration, type DeclarationRevision, type DeclarationSnapshot, type DepotApp, type InventoryEntry, type Operation,
+  type Declaration, type DeclarationRevision, type DeclarationSnapshot, type DepotApp, type Operation,
   type Page, type Release } from './api'
 import { ActionLink, EmptyState, LoadingState, PageHeader, ProblemNotice, StatusBadge, TechnicalDetails } from './components'
 import { useAuth } from './portal'
@@ -191,17 +191,7 @@ export function AppDeclarations() {
     <DeclarationEditor title="Application data" scope="app" path={`/apps/${app.id}/declarations`} editable={canManage(app, state.session!.user)} /></>
 }
 
-function Inventory({ artifactId }: { artifactId: string }) {
-  const [cursor, setCursor] = useState('')
-  const inventory = useResource(`inventory:${artifactId}:${cursor}`, signal => apiRequest<Page<InventoryEntry>>(`/artifacts/${enc(artifactId)}/inventory?pageSize=50${cursor ? `&cursor=${enc(cursor)}` : ''}`, { authenticated: true, signal }).then(result => result.value))
-  return <div className="inventory"><h4>Tree inventory</h4>{inventory.loading ? <LoadingState /> : inventory.error ? <ProblemNotice error={inventory.error} retry={inventory.retry} /> : <>
-    <ul className="compact-list">{inventory.value!.items.map(entry => <li key={entry.path}><span><strong>{entry.type === 'Directory' ? 'Directory' : 'File'}</strong> {entry.path}</span>
-      {entry.type === 'File' && entry.fileId && <a href={`/api/v1/artifacts/${enc(artifactId)}/files/${enc(entry.fileId)}`} download={entry.path.split('/').pop()}>Download</a>}</li>)}</ul>
-    {inventory.value!.nextCursor && <button className="button button-secondary" onClick={() => setCursor(inventory.value!.nextCursor!)}>Next inventory page</button>}
-  </>}</div>
-}
-
-function ArtifactRow({ association, editable, removable, onRemoved }: { association: Association; editable: boolean; removable: boolean; onRemoved: (id: string) => void }) {
+function ArtifactRow({ appId, association, editable, removable, onRemoved }: { appId: string; association: Association; editable: boolean; removable: boolean; onRemoved: (id: string) => void }) {
   const artifact = useResource(`artifact:${association.artifactId}`, signal => apiRequest<Artifact>(`/artifacts/${enc(association.artifactId)}`, { authenticated: true, signal }).then(result => result.value))
   const current = useResource(`association:${association.id}`, signal => resource<Association>(`/associations/${association.id}`, signal))
   const { state } = useAuth()
@@ -214,7 +204,7 @@ function ArtifactRow({ association, editable, removable, onRemoved }: { associat
   return <section className="panel"><h3>Artifact association</h3>
     {artifact.loading ? <LoadingState /> : artifact.error ? <ProblemNotice error={artifact.error} retry={artifact.retry} /> : <>
       <div className="identity-line"><StatusBadge value={artifact.value!.kind} />{artifact.value!.size != null && <span>{artifact.value!.size.toLocaleString()} bytes</span>}</div>
-      {artifact.value!.kind === 'File' ? <a className="button button-secondary" href={`/api/v1/artifacts/${enc(artifact.value!.id)}/content`} download>Download file</a> : <Inventory artifactId={artifact.value!.id} />}
+      <Link className="button button-secondary" to={`/apps/${appId}/releases/${association.releaseId}/artifacts/${association.id}`}>Explore Artifact and entry points</Link>
       <TechnicalDetails><dl className="facts"><div><dt>Artifact ID</dt><dd><code>{artifact.value!.id}</code></dd></div><div><dt>Association ID</dt><dd><code>{association.id}</code></dd></div></dl></TechnicalDetails>
       {removable && current.value && <div className="section-action"><ConfirmDialog label="Remove association" detail="Remove this Artifact from the Draft release? This revokes the association; immutable content may remain shared elsewhere." confirm="Remove association" onConfirm={remove} /></div>}
     </>}
@@ -285,7 +275,7 @@ export function ReleaseDetail() {
       {!canPublish && <p className="subtle">Current Publish permission is required to publish.</p>}</section>}
     <section className="panel"><h2>Artifacts</h2>{associations.loading ? <LoadingState /> : associations.error ? <ProblemNotice error={associations.error} retry={associations.retry} /> : <>
       {!associations.value!.items.length && <EmptyState title="No Artifacts associated" detail="Upload or associate an Artifact before publishing." />}
-      {associations.value!.items.map(item => <ArtifactRow key={item.id} association={item} editable={allowed} removable={!!mutable} onRemoved={id => { setOperation(id); setRefresh(value => value + 1); current.retry() }} />)}
+      {associations.value!.items.map(item => <ArtifactRow key={item.id} appId={app.id} association={item} editable={allowed} removable={!!mutable} onRemoved={id => { setOperation(id); setRefresh(value => value + 1); current.retry() }} />)}
       {associations.value!.nextCursor && <button className="button button-secondary" onClick={() => setCursor(associations.value!.nextCursor!)}>Next Artifacts page</button>}
     </>}</section>
     {mutable && <section className="panel form-panel"><h2>Associate an existing Artifact</h2><p>Enter the identity of an Artifact already accessible to your account. Registration does not publish the Release.</p>

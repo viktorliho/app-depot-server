@@ -10,6 +10,7 @@ import { UsersPage, DiagnosticsPage, ServerSettingsPage } from './admin'
 import { BackupsPage } from './backups'
 import { AccountPage } from './account'
 import { ArtworkPage } from './artwork'
+import { ArtifactExplorer } from './explorer'
 import './style.css'
 
 createRoot(document.getElementById('root')!).render(<React.StrictMode><BrowserRouter><ThemeProvider><AuthProvider><Routes>
@@ -34,6 +35,7 @@ createRoot(document.getElementById('root')!).render(<React.StrictMode><BrowserRo
     <Route path="releases" element={<ApplicationReleases />} />
     <Route path="releases/new" element={<NewRelease />} />
     <Route path="releases/:releaseId" element={<ReleaseDetail />} />
+    <Route path="releases/:releaseId/artifacts/:associationId" element={<ArtifactExplorer />} />
     <Route path="releases/:releaseId/uploads/new" element={<UploadPage target="release" />} />
     <Route path="uploads/new" element={<UploadPage target="app" />} />
     <Route path="channels" element={<ChannelsPage />} />

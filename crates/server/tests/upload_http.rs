@@ -1538,6 +1538,30 @@ async fn acknowledged_range_survives_real_process_kill() {
     assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
     let artifact_inventory: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(artifact_inventory["items"][0]["path"], "a.txt");
+    let (status, body) = request(
+        addr,
+        "GET",
+        &format!("/api/v1/artifacts/{artifact}/inventory?parent=&pageSize=1"),
+        &token,
+        &[],
+        &[],
+    )
+    .unwrap();
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["items"][0]["path"],
+        "a.txt"
+    );
+    let (status, _) = request(
+        addr,
+        "GET",
+        &format!("/api/v1/artifacts/{artifact}/inventory?parent=../bad"),
+        &token,
+        &[],
+        &[],
+    )
+    .unwrap();
+    assert_eq!(status, 400);
     let stable_file_id = artifact_inventory["items"][0]["fileId"].as_str().unwrap();
     let (status, bytes) = request(
         addr,
@@ -1584,6 +1608,107 @@ async fn acknowledged_range_survives_real_process_kill() {
     assert_eq!(status, 201, "{}", String::from_utf8_lossy(&body));
     let association: Value = serde_json::from_slice(&body).unwrap();
     let association_id = association["id"].as_str().unwrap();
+    let assess = |data: Value| {
+        let (status, body) = request(
+            addr,
+            "POST",
+            &format!("/api/v1/associations/{association_id}/entry-points/validate"),
+            &token,
+            &[("Content-Type", "application/json")],
+            json!({"data":data}).to_string().as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+        serde_json::from_slice::<Value>(&body).unwrap()
+    };
+    let entry_data = json!({"other":"preserved","appDepot":{"entryPoints":[
+        {"id":"primary","label":"Script","target":{"type":"TreeFile","path":"a.txt"},"platforms":["linux/x86_64"]},
+        {"id":"secondary","target":{"type":"TreeFile","path":"a.txt"}}
+    ]}});
+    assert_eq!(assess(entry_data.clone())["status"], "Valid");
+    assert_eq!(
+        assess(
+            json!({"appDepot":{"entryPoints":[{"id":"bad","target":{"type":"TreeFile","path":"../etc/passwd"}}]}})
+        )["items"][0]["status"],
+        "Invalid"
+    );
+    assert_eq!(
+        assess(
+            json!({"appDepot":{"entryPoints":[{"id":"missing","target":{"type":"TreeFile","path":"missing.txt"}}]}})
+        )["items"][0]["status"],
+        "Missing"
+    );
+    assert_eq!(
+        assess(
+            json!({"appDepot":{"entryPoints":[{"id":"wrong-kind","target":{"type":"ArtifactFile"}}]}})
+        )["items"][0]["status"],
+        "Invalid"
+    );
+    let (status, _) = request(
+        addr,
+        "POST",
+        &format!("/api/v1/associations/{association_id}/entry-points/validate"),
+        "",
+        &[("Content-Type", "application/json")],
+        json!({"data":entry_data}).to_string().as_bytes(),
+    )
+    .unwrap();
+    assert!(
+        status == 401 || status == 404,
+        "private validation leaked with status {status}"
+    );
+    let declaration_etag = format!("\"declarations-{association_id}-1\"");
+    let (status, body) = request(
+        addr,
+        "PUT",
+        &format!("/api/v1/associations/{association_id}/declarations"),
+        &token,
+        &[
+            ("Content-Type", "application/json"),
+            ("If-Match", &declaration_etag),
+        ],
+        json!({"data":entry_data}).to_string().as_bytes(),
+    )
+    .unwrap();
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["data"]["other"],
+        "preserved"
+    );
+    let (status, _) = request(
+        addr,
+        "PUT",
+        &format!("/api/v1/associations/{association_id}/declarations"),
+        &token,
+        &[
+            ("Content-Type", "application/json"),
+            ("If-Match", &declaration_etag),
+        ],
+        json!({"data":null}).to_string().as_bytes(),
+    )
+    .unwrap();
+    assert_eq!(status, 412);
+    let unresolved = json!({"appDepot":{"entryPoints":[{"id":"future","target":{"type":"TreeFile","path":"missing.txt"},"extension":{"kept":true}}]},"other":"kept"});
+    let next_etag = format!("\"declarations-{association_id}-2\"");
+    let (status, body) = request(
+        addr,
+        "PUT",
+        &format!("/api/v1/associations/{association_id}/declarations"),
+        &token,
+        &[
+            ("Content-Type", "application/json"),
+            ("If-Match", &next_etag),
+        ],
+        json!({"data":unresolved}).to_string().as_bytes(),
+    )
+    .unwrap();
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["data"]["appDepot"]["entryPoints"][0]
+            ["extension"]["kept"],
+        true
+    );
+    assert_eq!(assess(unresolved)["items"][0]["status"], "Missing");
     let (status, body) = request(
         addr,
         "GET",

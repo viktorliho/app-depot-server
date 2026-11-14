@@ -1,5 +1,5 @@
 use crate::auth::{reader, ApiError, AuthState};
-use app_depot_domain::{FileArtifactId, TreeArtifactId};
+use app_depot_domain::{tree::validate_path, FileArtifactId, TreeArtifactId};
 use axum::{
     body::Body,
     extract::{Path, Query, State},
@@ -9,6 +9,7 @@ use axum::{
     Json, Router,
 };
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use sqlx::Row;
 use std::{
     collections::HashMap,
@@ -129,35 +130,66 @@ async fn inventory(
     if !(1..=1000).contains(&size) {
         return Err(app_depot_application::upload::UploadError::Invalid.into());
     }
-    let rows = sqlx::query("SELECT path, entry_type, file_id, size, sha256, executable FROM artifact_entries WHERE artifact_id=? ORDER BY path COLLATE BINARY")
-        .bind(&id).fetch_all(&state.auth.pool).await.map_err(|error| app_depot_application::upload::UploadError::Retryable(error.to_string()))?;
-    let offset = if let Some(cursor) = query.get("cursor") {
-        let parts: Vec<&str> = cursor.split('.').collect();
-        if parts.len() != 5
-            || parts[0] != "a1"
-            || parts[1] != id
-            || parts[2]
-                != principal
+    let parent = query.get("parent").map(String::as_str).unwrap_or("");
+    let search = query.get("q").map(String::as_str).unwrap_or("");
+    if (!parent.is_empty() && validate_path(parent).is_err())
+        || (query.contains_key("parent") && !search.is_empty())
+        || search.len() > 256
+        || search.contains('\0')
+    {
+        return Err(app_depot_application::upload::UploadError::Invalid.into());
+    }
+    if !parent.is_empty() {
+        let exists: i64 = sqlx::query_scalar("SELECT count(*) FROM artifact_entries WHERE artifact_id=? AND path=? AND entry_type='Directory'")
+            .bind(&id).bind(parent).fetch_one(&state.auth.pool).await
+            .map_err(|error| app_depot_application::upload::UploadError::Retryable(error.to_string()))?;
+        if exists == 0 {
+            return Err(app_depot_application::upload::UploadError::NotFound.into());
+        }
+    }
+    let binding = format!(
+        "{:x}",
+        Sha256::digest(
+            format!(
+                "{id}\0{}\0{}\0{parent}\0{search}",
+                principal
                     .as_ref()
                     .map(|actor| actor.id.as_str())
-                    .unwrap_or("anonymous")
-            || parts[4] != size.to_string()
+                    .unwrap_or("anonymous"),
+                query.contains_key("parent")
+            )
+            .as_bytes()
+        )
+    );
+    let offset = if let Some(cursor) = query.get("cursor") {
+        let parts: Vec<&str> = cursor.split('.').collect();
+        if parts.len() != 4
+            || parts[0] != "a2"
+            || parts[1] != binding
+            || parts[3] != size.to_string()
         {
             return Err(app_depot_application::upload::UploadError::InvalidCursor.into());
         }
-        let offset: usize = parts[3]
+        let offset: usize = parts[2]
             .parse()
             .map_err(|_| app_depot_application::upload::UploadError::InvalidCursor)?;
-        if offset == 0 || offset >= rows.len() {
+        if offset == 0 || offset % size != 0 || offset > i64::MAX as usize {
             return Err(app_depot_application::upload::UploadError::InvalidCursor.into());
         }
         offset
     } else {
         0
     };
-    let end = offset.saturating_add(size).min(rows.len());
+    let rows = sqlx::query("SELECT path, entry_type, file_id, size, sha256, executable FROM artifact_entries WHERE artifact_id=? AND (CASE WHEN ?=1 THEN (CASE WHEN ?='' THEN instr(path,'/')=0 ELSE substr(path,1,length(?)+1)=?||'/' AND instr(substr(path,length(?)+2),'/')=0 END) WHEN ?!='' THEN instr(path,?)>0 ELSE 1 END) ORDER BY path COLLATE BINARY LIMIT ? OFFSET ?")
+        .bind(&id).bind(query.contains_key("parent") as i64).bind(parent).bind(parent).bind(parent).bind(parent).bind(search).bind(search)
+        .bind((size + 1) as i64).bind(offset as i64)
+        .fetch_all(&state.auth.pool).await.map_err(|error| app_depot_application::upload::UploadError::Retryable(error.to_string()))?;
+    if offset > 0 && rows.is_empty() {
+        return Err(app_depot_application::upload::UploadError::InvalidCursor.into());
+    }
+    let has_more = rows.len() > size;
     let mut items = Vec::new();
-    for row in &rows[offset..end] {
+    for row in rows.iter().take(size) {
         let path: String = row.get("path");
         if row.get::<String, _>("entry_type") == "Directory" {
             items.push(json!({"type":"Directory","path":path}));
@@ -169,15 +201,7 @@ async fn inventory(
                 "executable":row.get::<Option<i64>, _>("executable").ok_or_else(|| app_depot_application::upload::UploadError::Retryable("artifact executable missing".into()))? != 0}));
         }
     }
-    let next_cursor = (end < rows.len()).then(|| {
-        format!(
-            "a1.{id}.{}.{end}.{size}",
-            principal
-                .as_ref()
-                .map(|actor| actor.id.as_str())
-                .unwrap_or("anonymous")
-        )
-    });
+    let next_cursor = has_more.then(|| format!("a2.{binding}.{}.{size}", offset + size));
     let mut response = Json(json!({"items":items,"nextCursor":next_cursor})).into_response();
     response.headers_mut().insert(
         header::ETAG,

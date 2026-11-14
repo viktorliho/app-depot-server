@@ -3417,6 +3417,53 @@ paths:
       security:
       - bearerAuth: []
       - cookieAuth: []
+  /associations/{association_id}/entry-points/validate:
+    post:
+      operationId: validateAssociationEntryPoints
+      tags:
+      - Declarations
+      summary: Assess optional entry-point references against an associated Artifact without changing declarations
+      description: The current declaration PUT remains lossless for arbitrary JSON. This read-only assessment does not create a revision or gate publication.
+      parameters:
+      - name: association_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [data]
+              properties:
+                data: {}
+      responses:
+        '200':
+          description: Entry-point assessment; non-Valid statuses do not modify data.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, items]
+                properties:
+                  status: { type: string, enum: [Absent, Valid, Issues, Unsupported] }
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [index, id, status]
+                      properties:
+                        index: { type: integer, minimum: 0 }
+                        id: { type: string }
+                        status: { type: string, enum: [Valid, Missing, NotFile, Invalid, Unsupported] }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        default: { $ref: '#/components/responses/InvalidRequest' }
+      security:
+      - {}
+      - bearerAuth: []
+      - cookieAuth: []
   /associations/{association_id}/declarations/revisions:
     get:
       operationId: listAssociationDeclarationRevisions
@@ -4656,6 +4703,14 @@ paths:
         schema:
           type: string
         description: Opaque cursor; invalid/expired returns 400.
+      - name: parent
+        in: query
+        schema: { type: string }
+        description: Exact original directory path for direct children; empty value selects root. Cannot combine with nonempty q.
+      - name: q
+        in: query
+        schema: { type: string, maxLength: 256 }
+        description: Case-sensitive UTF-8 path substring search, at most 256 bytes. Cannot combine with parent.
       responses:
         '200':
           description: '200'
