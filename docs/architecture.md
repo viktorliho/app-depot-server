@@ -99,3 +99,7 @@ Transfer parameters and adaptive parallelism are tunable based on benchmarks. On
 ## 15. Implementation structure
 
 The Server is a Rust modular monolith with domain, application, infrastructure and HTTP Server boundaries. SQLite coordinates catalog state and durable operations; the filesystem stores CAS objects and temporary transfer data. Local Dev/Preview workflows use the real Server, SQLite, CAS and API. This structure implements the contracts above without changing public API, identity, authorization or durability rules.
+
+## 16. Future application portability
+
+Future work may export one App, a selected Release and its original Artifacts, current artwork and current App, Release and association declarations as a self-contained logical package. A possible layout has `origin/`, `artwork/`, `declarations/` and an integrity and relationship manifest; this is a direction, not a package-format specification. Metadata and artwork work must preserve immutable content-addressed original Artifacts, independently identifiable content-addressed artwork with explicit current references, and portable declarations that do not depend on physical Server paths. The App, Release, Artifact and association remain distinct entities; portable metadata must not depend on local absolute paths, host configuration or Server database IDs. A unified logical package does not require physically duplicating entire App directories. Export, import, snapshot generation and package validation are outside the current scope.
