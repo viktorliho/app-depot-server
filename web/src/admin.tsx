@@ -1,9 +1,27 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { apiRequest, idempotencyKey, jsonBody, resource, type Diagnostics, type Page, type ServerSettings, type User } from './api'
-import { EmptyState, LoadingState, PageHeader, ProblemNotice, StatusBadge, TechnicalDetails } from './components'
+import { ActionLink, EmptyState, LoadingState, PageHeader, ProblemNotice, StatusBadge, TechnicalDetails } from './components'
 import { ConfirmDialog } from './management'
 import { useAuth } from './portal'
 import { useResource } from './use-resource'
+
+type ImportSource = { id: string; displayName: string; kind: 'Inbox' | 'Configured'; containerPath: string;
+  available: boolean; importReadOnly: boolean }
+
+export function ImportSourcesPage() {
+  const sources = useResource('admin-import-sources', signal => apiRequest<{ items: ImportSource[] }>('/admin/import-sources', { authenticated: true, signal }).then(result => result.value))
+  return <><PageHeader title="Import sources" description="Approved locations for Server-side Artifact Import." actions={<button className="button button-secondary" onClick={sources.retry}>Refresh</button>} />
+    <section className="panel"><h2>App Depot Inbox</h2><p>The default Inbox is a persistent landing directory next to the managed data root. App Depot creates the directory when permitted. The import browser never writes or deletes source content; the container needs filesystem write access only to create the directory. The Inbox is not CAS, a backup member, a ZFS dataset, or an SMB share.</p>
+      <p>To expose it through SMB or NFS, an operator must configure a host share. A separate host dataset can be mounted at the Inbox container path; changing mounts requires a container restart.</p></section>
+    {sources.loading ? <LoadingState /> : sources.error ? <ProblemNotice error={sources.error} retry={sources.retry} /> :
+      <section className="panel"><h2>Configured sources</h2><div className="table-wrap"><table><thead><tr><th>Source</th><th>Availability</th><th>Import access</th><th>Container path</th></tr></thead><tbody>
+        {sources.value!.items.map(source => <tr key={source.id}><td><strong>{source.displayName}</strong><small>{source.kind === 'Inbox' ? 'Built-in, Server Admin only' : 'Operator-configured root'}</small></td>
+          <td><StatusBadge value={source.available ? 'Available' : 'Unavailable'} /></td><td>{source.importReadOnly ? 'Read-only operations' : 'Unknown'}</td><td><code>{source.containerPath}</code></td></tr>)}
+      </tbody></table></div><p className="subtle">Configured roots are read by App Depot; the Server does not verify the host mount mode. Mount external sources read-only and set `APP_DEPOT_IMPORT_ROOTS` in the container configuration. An unavailable Inbox requires a writable parent or a mounted directory at its container path. These settings cannot be changed from the Portal.</p>
+      {sources.value!.items.some(source => source.available) && <ActionLink to="/import/new-app" secondary>Import into a new application</ActionLink>}
+      </section>}
+  </>
+}
 
 function UserEditor({ id, changed }: { id: string; changed: () => void }) {
   const { state, refresh } = useAuth()

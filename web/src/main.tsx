@@ -7,7 +7,7 @@ import { ApplicationOverview, ApplicationReleases, ApplicationsPage, CreateAppli
 import { AppDeclarations, AppSettings, ChannelsPage, NewRelease, OperationPage, ReleaseDetail } from './management'
 import { UploadPage } from './uploads'
 import { ServerImportPage } from './server-import'
-import { UsersPage, DiagnosticsPage, ServerSettingsPage } from './admin'
+import { UsersPage, DiagnosticsPage, ServerSettingsPage, ImportSourcesPage } from './admin'
 import { BackupsPage } from './backups'
 import { AccountPage } from './account'
 import { ArtworkPage } from './artwork'
@@ -29,6 +29,7 @@ createRoot(document.getElementById('root')!).render(<React.StrictMode><BrowserRo
       <Route path="/admin/users" element={<UsersPage />} />
       <Route path="/admin/backups" element={<BackupsPage />} />
       <Route path="/admin/diagnostics" element={<DiagnosticsPage />} />
+      <Route path="/admin/import-sources" element={<ImportSourcesPage />} />
       <Route path="/admin/settings" element={<ServerSettingsPage />} />
     </Route>
   </Route>

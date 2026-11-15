@@ -5,7 +5,7 @@ import { ActionLink, LoadingState, PageHeader, ProblemNotice } from './component
 import { useAuth } from './portal'
 import { useResource } from './use-resource'
 
-type Root = { id: string }
+type Root = { id: string; displayName: string; kind: 'Inbox' | 'Configured' }
 type Entry = { name: string; entryType: 'File' | 'Directory'; size: number | null }
 type Page = { items: Entry[]; nextCursor: string | null }
 type Progress = { phase: string; sessionId?: string; filesTotal?: number; filesProcessed?: number;
@@ -50,7 +50,9 @@ export function ServerImportPage({ target }: { target: 'new-app' | 'app' | 'rele
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [result, setResult] = useState<FinalizationResult | null>(null)
+  const [published, setPublished] = useState(false)
   const [cancelOperationId, setCancelOperationId] = useState<string | null>(null)
+  const cancellationRequested = useRef(false)
   const controller = useRef<AbortController | null>(null)
   const keyRef = useRef<{ fingerprint: string; key: string } | null>(null)
   const availableRoots = roots.value?.items || []
@@ -92,9 +94,12 @@ export function ServerImportPage({ target }: { target: 'new-app' | 'app' | 'rele
     const abort = new AbortController()
     controller.current = abort
     setBusy(true); setError(undefined); setResult(null); setMessage('')
+    setPublished(false)
+    cancellationRequested.current = false
     setCancelOperationId(null)
     setProgress({ phase: 'Scanning' })
     let newAttemptRequired = false
+    let registered: FinalizationResult | null = null
     try {
       const response = await fetch('/api/v1/server-imports', { method: 'POST', credentials: 'same-origin', signal: abort.signal,
         headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': state.session!.csrfToken, 'Idempotency-Key': key }, body: JSON.stringify(request) })
@@ -119,6 +124,7 @@ export function ServerImportPage({ target }: { target: 'new-app' | 'app' | 'rele
           const update = JSON.parse(data) as Progress
           setProgress(update)
           if (update.phase === 'Failed') {
+            if (update.problem?.code === 'session_cancelled') setProgress({ ...update, phase: 'Cancelled' })
             newAttemptRequired = ['source_changed', 'hash_mismatch', 'idempotency_conflict', 'session_cancelled'].includes(update.problem?.code || '')
             throw new Error(update.problem?.title || 'Server import failed.')
           }
@@ -128,11 +134,14 @@ export function ServerImportPage({ target }: { target: 'new-app' | 'app' | 'rele
       if (!completed || completed.phase !== 'Completed' || !completed.releaseId) {
         throw new Error('Import did not complete. Retry with the same source to inspect the session.')
       }
+      registered = completed
+      setResult(completed)
       if (publish) {
         setProgress({ phase: 'Publishing', sessionId: completed.sessionId })
         const current = await resource<Release>(`/releases/${completed.releaseId}`)
         await apiRequest(`/releases/${completed.releaseId}/publish`, { method: 'POST', authenticated: true,
           csrf: state.session!.csrfToken, idempotencyKey: key + '-publish', ifMatch: current.etag })
+        setPublished(true)
       }
       setResult(completed); setProgress({ phase: 'Completed', result: completed })
       setMessage(publish ? 'Imported and published.' : 'Imported into a Draft release.')
@@ -144,9 +153,12 @@ export function ServerImportPage({ target }: { target: 'new-app' | 'app' | 'rele
         keyRef.current = null
         setMessage('The previous attempt cannot be resumed. Stabilize the source, then start a new import.')
       }
+      if (registered) setMessage('Artifact registered in a Draft release; publication was not completed.')
       if (failure instanceof DOMException && failure.name === 'AbortError') setMessage(current => current || 'Import stream interrupted. Retry the exact request to inspect its upload session.')
       else setError(failure)
-      setProgress(current => current && { ...current, phase: 'Failed' })
+      setProgress(current => current && (current.phase === 'Completed' || current.phase === 'Cancelled' || cancellationRequested.current
+        ? { ...current, phase: cancellationRequested.current && current.phase !== 'Cancelled' ? 'Cancelling' : current.phase }
+        : { ...current, phase: 'Failed' }))
     } finally { setBusy(false); controller.current = null }
   }
   async function cancel() {
@@ -157,10 +169,13 @@ export function ServerImportPage({ target }: { target: 'new-app' | 'app' | 'rele
         csrf: state.session!.csrfToken, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requestKey }) })
       if (response.value.phase === 'Completed') {
         setResult(response.value as FinalizationResult)
+        setProgress({ phase: 'Completed', result: response.value as FinalizationResult })
         setMessage('Registration completed before cancellation. Inspect the result before another action.')
       } else {
+        cancellationRequested.current = true
+        setProgress(current => current && { ...current, phase: 'Cancelling' })
         setCancelOperationId(response.value.operationId || null)
-        setMessage('Cancellation requested. This import cannot be resumed after cancellation. Start a new attempt if needed.')
+        setMessage('Cancellation requested. Follow the operation to confirm completion before starting a new import.')
       }
       try { sessionStorage.removeItem('app-depot-server-import') } catch { /* Browser storage is optional. */ }
       keyRef.current = null
@@ -180,7 +195,7 @@ export function ServerImportPage({ target }: { target: 'new-app' | 'app' | 'rele
         <form className="form-stack" onSubmit={submit}>
           {target === 'new-app' && <label>App name<input value={name} disabled={busy} onChange={event => setName(event.target.value)} required /></label>}
           <label>Import root<select value={rootId} disabled={busy} onChange={event => { setRootId(event.target.value); navigateDirectory('') }}>
-            {availableRoots.map(root => <option key={root.id} value={root.id}>{root.id}</option>)}</select></label>
+            {availableRoots.map(root => <option key={root.id} value={root.id}>{root.displayName}</option>)}</select></label>
           <div className="form-actions">
             <button type="button" className="button button-secondary" disabled={busy || !path} onClick={() => navigateDirectory(path.split('/').slice(0, -1).join('/'))}>Up one directory</button>
             <span>Location: /{path || ''}</span>
@@ -206,13 +221,19 @@ export function ServerImportPage({ target }: { target: 'new-app' | 'app' | 'rele
             <option value="ZipImport">ZIP contents as a Tree Artifact</option>
           </select></label>}
           <p className="subtle">The Server never modifies the source. Importing ZIP contents is an explicit choice. Registration creates a Draft release; publication is separate.</p>
+          {rootId === 'inbox' && <p className="subtle">App Depot Inbox is a persistent landing area outside managed CAS. Place files there using the host filesystem or an operator-configured share. The import browser is read-only.</p>}
           <div className="form-actions"><button className="button button-secondary" value="draft" disabled={busy || !!result || !selected || (target === 'new-app' && !name.trim())}>Import and save Draft</button>
             {canCreate && <button className="button button-primary" value="publish" disabled={busy || !!result || !selected || (target === 'new-app' && !name.trim())}>Import and publish</button>}
             {busy && <button type="button" className="button button-danger" onClick={() => void cancel()}>Cancel import</button>}</div>
         </form>
         {progress && <section className="upload-status" aria-label="Import progress"><h2>{progress.phase === 'Receiving' ? 'Copying source bytes' : progress.phase === 'Importing' ? 'Extracting ZIP' : progress.phase === 'Committing' ? 'CAS registration' : progress.phase}</h2>
-          {progress.phase === 'Receiving' && progress.filesTotal !== undefined ? <p>{progress.filesProcessed?.toLocaleString()} / {progress.filesTotal.toLocaleString()} files · {bytes(progress.bytesProcessed || 0)} / {bytes(progress.bytesTotal || 0)} acknowledged in staging</p> : <p>Server-side work is in progress; this phase has no reliable percentage.</p>}
-          {progress.phase !== 'Completed' && progress.phase !== 'Failed' && <progress aria-label="Import in progress" />}</section>}
+          {progress.phase === 'Completed' ? <p>Artifact registration completed. {published ? 'The Release is Published.' : 'The Release remains Draft until you publish it.'} The original source remains untouched; removing it later will not remove the registered Artifact. Deleting the App also leaves Inbox content unchanged.</p>
+            : progress.phase === 'Failed' ? <p>{result ? 'Artifact registration completed, but publication failed. The Release remains Draft.' : 'Import failed. No incomplete content was registered as an Artifact.'}</p>
+            : progress.phase === 'Cancelled' ? <p>Import cancelled. No incomplete content was registered as an Artifact.</p>
+            : progress.phase === 'Cancelling' ? <p>Cancellation is in progress. Follow the cancellation operation for its final state.</p>
+            : progress.phase === 'Receiving' && progress.filesTotal !== undefined ? <p>{progress.filesProcessed?.toLocaleString()} / {progress.filesTotal.toLocaleString()} files · {bytes(progress.bytesProcessed || 0)} / {bytes(progress.bytesTotal || 0)} acknowledged in staging</p>
+            : <p>Server-side work is in progress; this phase has no reliable percentage.</p>}
+          {!['Completed', 'Failed', 'Cancelled', 'Cancelling'].includes(progress.phase) && <progress aria-label="Import in progress" />}</section>}
         {message && <p role="status">{message}</p>}
         {error !== undefined && <ProblemNotice error={error} />}
         {cancelOperationId && <ActionLink to={`/operations/${cancelOperationId}`} secondary>View cancellation operation</ActionLink>}

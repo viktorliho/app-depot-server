@@ -4,9 +4,14 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::HashSet,
     env,
-    fs::File,
+    fs::{self, File},
     io::{self, Read},
-    os::{fd::AsRawFd, fd::FromRawFd, unix::ffi::OsStrExt, unix::fs::PermissionsExt},
+    os::{
+        fd::AsRawFd,
+        fd::FromRawFd,
+        unix::ffi::OsStrExt,
+        unix::fs::{MetadataExt, PermissionsExt},
+    },
     path::{Component, Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -27,8 +32,16 @@ pub struct RootSpec {
 #[derive(Clone)]
 pub struct ImportRoot {
     pub id: String,
+    pub display_name: String,
+    pub kind: &'static str,
+    pub container_path: PathBuf,
     pub allowed_user_ids: HashSet<String>,
     directory: Arc<File>,
+}
+
+pub struct ImportSources {
+    pub roots: Vec<ImportRoot>,
+    pub inbox_path: PathBuf,
 }
 
 #[derive(Serialize)]
@@ -191,14 +204,38 @@ fn fd_entries(directory: &File) -> io::Result<Vec<String>> {
     Ok(entries)
 }
 
-pub fn load_roots(data_root: &Path) -> Result<Vec<ImportRoot>, Box<dyn std::error::Error>> {
-    let Some(raw) = env::var_os("APP_DEPOT_IMPORT_ROOTS") else {
-        return Ok(Vec::new());
-    };
-    let specs: Vec<RootSpec> = serde_json::from_str(&raw.to_string_lossy())?;
+fn prepare_inbox(managed: &Path) -> io::Result<(PathBuf, Option<File>)> {
+    let inbox_path = managed.parent().ok_or_else(invalid)?.join("inbox");
+    if !inbox_path.exists() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            let _ = fs::DirBuilder::new().mode(0o700).create(&inbox_path);
+        }
+    }
+    let inbox_directory = open_absolute(&inbox_path).ok();
+    Ok((inbox_path, inbox_directory))
+}
+
+pub fn load_roots(data_root: &Path) -> Result<ImportSources, Box<dyn std::error::Error>> {
     let managed = data_root.canonicalize()?;
-    let mut ids = HashSet::new();
+    let (inbox_path, inbox_directory) = prepare_inbox(&managed)?;
     let mut roots = Vec::new();
+    if let Some(directory) = inbox_directory {
+        roots.push(ImportRoot {
+            id: "inbox".into(),
+            display_name: "App Depot Inbox".into(),
+            kind: "Inbox",
+            container_path: inbox_path.clone(),
+            allowed_user_ids: HashSet::new(),
+            directory: Arc::new(directory),
+        });
+    }
+    let specs: Vec<RootSpec> = match env::var_os("APP_DEPOT_IMPORT_ROOTS") {
+        Some(raw) => serde_json::from_str(&raw.to_string_lossy())?,
+        None => Vec::new(),
+    };
+    let mut ids = HashSet::from([String::from("inbox")]);
     for spec in specs {
         if spec.id.is_empty()
             || spec.id.len() > 64
@@ -213,22 +250,39 @@ pub fn load_roots(data_root: &Path) -> Result<Vec<ImportRoot>, Box<dyn std::erro
         }
         let directory = open_absolute(&spec.path)?;
         let source = spec.path.canonicalize()?;
-        if source.starts_with(&managed) || managed.starts_with(&source) {
-            return Err("import roots must not overlap the managed data root".into());
+        if source.starts_with(&managed)
+            || managed.starts_with(&source)
+            || source.starts_with(&inbox_path)
+            || inbox_path.starts_with(&source)
+        {
+            return Err("configured import roots must not overlap managed data or Inbox".into());
         }
         for user in &spec.allowed_user_ids {
             uuid::Uuid::parse_str(user)?;
         }
         roots.push(ImportRoot {
+            display_name: spec.id.clone(),
+            kind: "Configured",
+            container_path: source,
             id: spec.id,
             allowed_user_ids: spec.allowed_user_ids.into_iter().collect(),
             directory: Arc::new(directory),
         });
     }
-    Ok(roots)
+    Ok(ImportSources { roots, inbox_path })
 }
 
 impl ImportRoot {
+    pub fn available(&self) -> bool {
+        let Ok(current) = open_absolute(&self.container_path) else {
+            return false;
+        };
+        match (self.directory.metadata(), current.metadata()) {
+            (Ok(held), Ok(current)) => held.dev() == current.dev() && held.ino() == current.ino(),
+            _ => false,
+        }
+    }
+
     pub fn allows(&self, user_id: &str, server_admin: bool) -> bool {
         server_admin || self.allowed_user_ids.contains(user_id)
     }
@@ -452,6 +506,9 @@ mod tests {
         fs::write(root.path().join("tree/a"), b"A").unwrap();
         let source = ImportRoot {
             id: "test".into(),
+            display_name: "Test".into(),
+            kind: "Configured",
+            container_path: root.path().to_path_buf(),
             allowed_user_ids: HashSet::new(),
             directory: Arc::new(open_absolute(&root.path().canonicalize().unwrap()).unwrap()),
         };
@@ -489,5 +546,31 @@ mod tests {
         assert!(claim.matches_metadata(&fs::metadata(root.path().join("tree/a")).unwrap()));
         fs::write(root.path().join("tree/a"), b"changed bytes").unwrap();
         assert!(!claim.matches_metadata(&fs::metadata(root.path().join("tree/a")).unwrap()));
+    }
+
+    #[test]
+    fn inbox_is_sibling_persistent_and_rejects_symlink_to_managed_root() {
+        let parent = tempfile::tempdir().unwrap();
+        let base = parent.path().canonicalize().unwrap();
+        let managed = base.join("production");
+        fs::create_dir(&managed).unwrap();
+        let (path, opened) = prepare_inbox(&managed).unwrap();
+        assert_eq!(path, base.join("inbox"));
+        assert!(opened.is_some());
+        fs::write(path.join("original.bin"), b"original").unwrap();
+        let (_, reopened) = prepare_inbox(&managed).unwrap();
+        assert!(reopened.is_some());
+        assert_eq!(fs::read(path.join("original.bin")).unwrap(), b"original");
+        drop(opened);
+        drop(reopened);
+        fs::remove_file(path.join("original.bin")).unwrap();
+        fs::remove_dir(&path).unwrap();
+        std::os::unix::fs::symlink(&managed, &path).unwrap();
+        let (_, unsafe_root) = prepare_inbox(&managed).unwrap();
+        assert!(unsafe_root.is_none());
+        fs::remove_file(&path).unwrap();
+        fs::write(&path, b"occupied").unwrap();
+        let (_, unavailable) = prepare_inbox(&managed).unwrap();
+        assert!(unavailable.is_none());
     }
 }

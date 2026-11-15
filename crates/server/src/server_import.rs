@@ -25,6 +25,7 @@ use sqlx::Row;
 use std::{
     collections::HashMap,
     convert::Infallible,
+    path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
@@ -40,6 +41,7 @@ pub struct ImportState {
     pub auth: AuthState,
     pub coordinator: Arc<UploadCoordinator<UploadAdapter>>,
     pub roots: Arc<Vec<ImportRoot>>,
+    pub inbox_path: PathBuf,
     pub active: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     pub permits: Arc<Semaphore>,
 }
@@ -57,6 +59,8 @@ pub struct ImportRequest {
 #[serde(rename_all = "camelCase")]
 struct RootView<'a> {
     id: &'a str,
+    display_name: &'a str,
+    kind: &'a str,
 }
 
 #[derive(Deserialize)]
@@ -75,7 +79,9 @@ fn root_for<'a>(
     state
         .roots
         .iter()
-        .find(|root| root.id == id && root.allows(&principal.id, principal.server_admin))
+        .find(|root| {
+            root.id == id && root.available() && root.allows(&principal.id, principal.server_admin)
+        })
         .ok_or_else(|| UploadError::NotFound.into())
 }
 
@@ -87,9 +93,48 @@ async fn list_roots(
     let items: Vec<_> = state
         .roots
         .iter()
-        .filter(|root| root.allows(&principal.id, principal.server_admin))
-        .map(|root| RootView { id: &root.id })
+        .filter(|root| root.available() && root.allows(&principal.id, principal.server_admin))
+        .map(|root| RootView {
+            id: &root.id,
+            display_name: &root.display_name,
+            kind: root.kind,
+        })
         .collect();
+    Ok(Json(serde_json::json!({ "items": items })))
+}
+
+async fn admin_sources(
+    State(state): State<ImportState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let principal = authorize(&state.auth, &headers, false).await?;
+    if !principal.server_admin {
+        return Err(UploadError::Forbidden.into());
+    }
+    let mut items = vec![serde_json::json!({
+        "id": "inbox",
+        "displayName": "App Depot Inbox",
+        "kind": "Inbox",
+        "containerPath": state.inbox_path,
+        "available": state.roots.iter().find(|root| root.id == "inbox").is_some_and(ImportRoot::available),
+        "importReadOnly": true,
+    })];
+    items.extend(
+        state
+            .roots
+            .iter()
+            .filter(|root| root.kind == "Configured")
+            .map(|root| {
+                serde_json::json!({
+                    "id": root.id,
+                    "displayName": root.display_name,
+                    "kind": root.kind,
+                    "containerPath": root.container_path,
+                    "available": root.available(),
+                    "importReadOnly": true,
+                })
+            }),
+    );
     Ok(Json(serde_json::json!({ "items": items })))
 }
 
@@ -607,6 +652,7 @@ async fn transfer_file(
 
 pub fn router(state: ImportState) -> Router {
     Router::new()
+        .route("/admin/import-sources", get(admin_sources))
         .route("/server-imports/roots", get(list_roots))
         .route("/server-imports/roots/{id}/entries", get(browse))
         .route("/server-imports", post(start).delete(cancel))

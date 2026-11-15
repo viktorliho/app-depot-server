@@ -234,7 +234,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 coordinator: coordinator.clone(),
                 root: Arc::new(lock.path.clone()),
             };
-            let import_roots = Arc::new(import_source::load_roots(&lock.path)?);
+            let import_sources = import_source::load_roots(&lock.path)?;
+            let import_roots = Arc::new(import_sources.roots);
             let download_state = download::DownloadState {
                 auth: auth_state.clone(),
                 root: Arc::new(lock.path.clone()),
@@ -275,6 +276,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     auth: auth_state.clone(),
                     coordinator: coordinator.clone(),
                     roots: import_roots,
+                    inbox_path: import_sources.inbox_path,
                     active: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
                     permits: Arc::new(tokio::sync::Semaphore::new(2)),
                 }))

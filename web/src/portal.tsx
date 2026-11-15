@@ -206,7 +206,7 @@ export function AppShell({ app, children }: { app?: DepotApp; children: ReactNod
       <nav aria-label={app ? 'Application navigation' : 'Server navigation'}>{links.map(link => <NavLink key={link.to} to={link.to} end={link.end} className={({ isActive }) => `nav-link ${isActive ? 'nav-link-active' : ''}`}>{link.label}</NavLink>)}</nav>
       {!app && session.user.serverAdmin && <nav aria-label="Server administration"><span className="eyebrow">ADMINISTRATION</span>{[
         { to: '/admin/users', label: 'Users & Access' }, { to: '/admin/backups', label: 'Backups' },
-        { to: '/admin/diagnostics', label: 'Diagnostics' }, { to: '/admin/settings', label: 'Server Settings' }
+        { to: '/admin/diagnostics', label: 'Diagnostics' }, { to: '/admin/import-sources', label: 'Import Sources' }, { to: '/admin/settings', label: 'Server Settings' }
       ].map(link => <NavLink key={link.to} to={link.to} className={({ isActive }) => `nav-link ${isActive ? 'nav-link-active' : ''}`}>{link.label}</NavLink>)}</nav>}
       {!app && canCreate && <div className="sidebar-bottom"><Link to="/upload/new-app">Upload a new application</Link></div>}
     </aside>
@@ -223,7 +223,8 @@ export function ServerWorkspace() { return <AppShell><Outlet /></AppShell> }
 
 export function AppWorkspace() {
   const { appId } = useParams()
-  const app = useResource(`app:${appId}`, signal => apiRequest<DepotApp>(`/apps/${appId}`, { signal, authenticated: true }).then(result => result.value))
+  const location = useLocation()
+  const app = useResource(`app:${appId}:${location.key}`, signal => apiRequest<DepotApp>(`/apps/${appId}`, { signal, authenticated: true }).then(result => result.value))
   if (app.loading) return <div className="boot"><LoadingState label="Opening application…" /></div>
   if (app.error) return <AppShell><PageHeader title="Application unavailable" /><ProblemNotice error={app.error} retry={app.retry} /><ActionLink to="/apps" secondary>Back to applications</ActionLink></AppShell>
   return <AppShell app={app.value}><Outlet context={app.value} /></AppShell>
@@ -231,4 +232,4 @@ export function AppWorkspace() {
 
 export function NotFound() { return <AppShell><PageHeader title="Page not found" description="This portal page is unavailable." /><ActionLink to="/apps" secondary>Open applications</ActionLink></AppShell> }
 
-export function AppIdentity({ app }: { app: DepotApp }) { return <div className="identity-line"><StatusBadge value={app.state} /><StatusBadge value={app.visibility} /></div> }
+export function AppIdentity({ app }: { app: DepotApp }) { return <div className="identity-line"><span>App publication: <StatusBadge value={app.state} /></span><span>Visibility: <StatusBadge value={app.visibility} /></span></div> }

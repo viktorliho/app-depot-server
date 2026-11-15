@@ -3624,7 +3624,7 @@ paths:
       operationId: listServerImportRoots
       tags: [Uploads]
       summary: List import roots authorized for the current user
-      description: Returns logical IDs only; physical host paths are never exposed.
+      description: Returns authorized logical IDs, display names and source kinds only; physical host paths are never exposed.
       responses:
         '200':
           description: Authorized roots. An empty list means no root is available to this user.
@@ -3632,6 +3632,28 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ServerImportRoots'
+        default:
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+  /admin/import-sources:
+    get:
+      operationId: listAdminImportSources
+      tags: [Uploads]
+      summary: List import-source availability and container paths for Server Admins
+      description: The built-in Inbox is always listed, including when unavailable. Import operations are read-only; the Server cannot verify the host mount mode or create host shares.
+      responses:
+        '200':
+          description: Current sources and configuration status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminImportSources'
         default:
           description: RFC 9457 Problem Details.
           content:
@@ -5504,7 +5526,27 @@ components:
             type: object
             properties:
               id: { type: string }
-            required: [id]
+              displayName: { type: string }
+              kind: { type: string, enum: [Inbox, Configured] }
+            required: [id, displayName, kind]
+            additionalProperties: false
+      required: [items]
+      additionalProperties: false
+    AdminImportSources:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              displayName: { type: string }
+              kind: { type: string, enum: [Inbox, Configured] }
+              containerPath: { type: string }
+              available: { type: boolean }
+              importReadOnly: { type: boolean }
+            required: [id, displayName, kind, containerPath, available, importReadOnly]
             additionalProperties: false
       required: [items]
       additionalProperties: false

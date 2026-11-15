@@ -11,6 +11,7 @@ services:
       APP_DEPOT_ASSETS: /app/web
       APP_DEPOT_BIND: 0.0.0.0:8787
     volumes:
+      # /data/production is managed storage; /data/inbox is the persistent default Inbox.
       - /mnt/POOL/app-depot:/data
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8787/api/v1/health/ready"]

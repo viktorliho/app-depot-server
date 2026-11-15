@@ -1,7 +1,7 @@
 import { chromium } from 'playwright-core'
 import { createHash, randomUUID } from 'node:crypto'
 import { execFileSync, spawn } from 'node:child_process'
-import { mkdir, mkdtemp, open, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, open, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -226,7 +226,33 @@ try {
   await page.getByRole('button', { name: 'Sign in' }).click()
   await page.getByRole('heading', { name: 'Server overview' }).waitFor()
   await page.getByRole('heading', { name: 'No applications yet' }).first().waitFor()
+  let inboxPath
+  if (preview) {
+    await page.goto(`${base}admin/import-sources`)
+    await page.getByRole('heading', { name: 'Import Sources' }).waitFor()
+    const sourceState = await page.evaluate(async () => {
+      const response = await fetch('/api/v1/admin/import-sources')
+      if (!response.ok) throw new Error(`Admin import sources failed: ${response.status}`)
+      return response.json()
+    })
+    const inbox = sourceState.items.find(item => item.id === 'inbox')
+    const shared = sourceState.items.find(item => item.id === 'shared')
+    if (!inbox?.available || inbox.kind !== 'Inbox' || !inbox.importReadOnly || !shared?.available) {
+      throw new Error(`Inbox or configured import root unavailable: ${JSON.stringify(sourceState)}`)
+    }
+    inboxPath = inbox.containerPath
+    await writeFile(join(inboxPath, 'inbox-file.txt'), 'Inbox file fixture')
+    await mkdir(join(inboxPath, 'inbox-tree/empty'), { recursive: true })
+    await mkdir(join(inboxPath, 'inbox-tree/nested'), { recursive: true })
+    await writeFile(join(inboxPath, 'inbox-tree/nested/content.txt'), 'Inbox tree content')
+    execFileSync('python3', ['-c', 'import sys,zipfile; z=zipfile.ZipFile(sys.argv[1],"w",zipfile.ZIP_DEFLATED); z.writestr("zip/nested.txt","Inbox ZIP content"); z.close()', join(inboxPath, 'inbox.zip')])
+    await symlink(dirname(inboxPath), join(inboxPath, 'escape-managed-parent'))
+    await page.goto(base)
+  }
   if (preview) await restartLanPreview(preview)
+  if (inboxPath && (await readFile(join(inboxPath, 'inbox-file.txt'), 'utf8')) !== 'Inbox file fixture') {
+    throw new Error('Inbox content did not survive Server restart')
+  }
   await page.reload()
   await page.getByRole('heading', { name: 'Server overview' }).waitFor()
   await page.getByRole('button', { name: 'Switch to dark theme' }).click()
@@ -696,6 +722,12 @@ try {
   await page.getByRole('heading', { name: 'Remove artifact association operation' }).waitFor()
   await page.getByRole('button', { name: 'Publish release' }).click()
   await page.getByText('Release published. Artifact composition is now immutable.').waitFor()
+  await page.getByRole('navigation', { name: 'Application navigation' }).getByRole('link', { name: 'Overview' }).click()
+  await page.getByText('App publication: Published').waitFor()
+  await page.getByText('Visibility: Public').waitFor()
+  await page.reload()
+  await page.getByText('App publication: Published').waitFor()
+  await page.goto(`${base}apps/${draftId}/releases/${releaseId}`)
   if (await page.getByRole('button', { name: 'Associate Artifact' }).count()) throw new Error('Published composition exposed association action')
   const immutable = await page.evaluate(async ({ releaseId, artifactId, key }) => {
     const session = await (await fetch('/api/v1/auth/sessions/current')).json()
@@ -880,6 +912,14 @@ try {
     if (sourceState.app.data.appDepot?.kind !== 'tool' || sourceState.association.data.appDepot?.entryPoints?.length !== 1 || sourceState.artwork.items.length !== 3) {
       throw new Error('Source instance changed during isolated offline restore')
     }
+    await page.goto(`${base}apps/${draftId}/releases/${integratedIds.releaseId}`)
+    await page.getByRole('button', { name: 'Delete release' }).click()
+    await page.getByRole('dialog', { name: 'Delete release' }).getByRole('button', { name: 'Delete release' }).click()
+    await page.getByRole('heading', { name: 'Delete release operation' }).waitFor()
+    await page.goto(`${base}apps/${draftId}`)
+    await page.getByText('App publication: Draft').waitFor()
+    await page.reload()
+    await page.getByText('App publication: Draft').waitFor()
     await page.goto(`${base}apps/${draftId}/settings`)
     await page.getByRole('button', { name: 'Delete application' }).click()
     await page.getByRole('dialog', { name: 'Delete application' }).getByRole('button', { name: 'Delete application' }).click()
@@ -1064,20 +1104,31 @@ try {
     await page.getByRole('button', { name: 'Previous page' }).click()
     await page.getByRole('heading', { name: 'Users & Access' }).waitFor()
     let serverFileIdentity
-    for (const [sourceName, mode, appName] of [
-      ['server-file.txt', 'BareFile', 'Server imported file'],
-      ['server-tree', 'BareTree', 'Server imported tree'],
-      ['server.zip', 'ZipImport', 'Server imported ZIP']
+    for (const [rootId, sourceName, mode, appName] of [
+      ['shared', 'server-file.txt', 'BareFile', 'Server imported file'],
+      ['shared', 'server-tree', 'BareTree', 'Server imported tree'],
+      ['shared', 'server.zip', 'ZipImport', 'Server imported ZIP'],
+      ['inbox', 'inbox-file.txt', 'BareFile', 'Inbox imported file'],
+      ['inbox', 'inbox-tree', 'BareTree', 'Inbox imported tree'],
+      ['inbox', 'inbox.zip', 'ZipImport', 'Inbox imported ZIP']
     ]) {
       await page.goto(`${base}import/new-app`)
       await page.getByRole('heading', { name: 'Import from server storage' }).waitFor()
+      await page.getByLabel('Import root').selectOption(rootId)
       await page.getByLabel('App name').fill(appName)
       await page.getByRole('button', { name: sourceName }).click()
       if (mode === 'BareTree') await page.getByRole('button', { name: 'Select this directory' }).click()
       if (mode === 'ZipImport') await page.getByLabel('Import as').selectOption('ZipImport')
-      await page.getByRole('button', { name: 'Import and save Draft' }).click()
+      const publishImport = rootId === 'inbox' && mode === 'ZipImport'
+      await page.getByRole('button', { name: publishImport ? 'Import and publish' : 'Import and save Draft' }).click()
       try { await page.getByRole('heading', { name: 'Completed' }).waitFor({ timeout: 30000 }) }
       catch { throw new Error(`Server import ${mode} did not complete: ${(await page.locator('body').innerText()).slice(-1200)}`) }
+      await page.getByText('Artifact registration completed.').waitFor()
+      await page.getByText(publishImport ? 'The Release is Published.' : 'The Release remains Draft until you publish it.').waitFor()
+      if (await page.getByLabel('Import in progress').count()) throw new Error('Completed import retained indeterminate progress')
+      if ((await page.getByRole('region', { name: 'Import progress' }).innerText()).includes('Server-side work is in progress')) {
+        throw new Error('Completed import retained active work message')
+      }
       const releaseLink = page.getByRole('link', { name: 'Open release' })
       await releaseLink.waitFor()
       const importedReleaseId = (await releaseLink.getAttribute('href')).split('/').pop()
@@ -1102,17 +1153,28 @@ try {
         return { artifactId, inventory: inventory.items.map(item => item.path), path: file.path,
           bytes: Array.from(new Uint8Array(await response.arrayBuffer())) }
       }, { releaseId: importedReleaseId, mode })
-      const expected = mode === 'BareFile' ? Buffer.from('Server-side import fixture')
-        : mode === 'BareTree' ? Buffer.from('Server tree content') : Buffer.from('Server ZIP content')
+      const expected = rootId === 'inbox'
+        ? mode === 'BareFile' ? Buffer.from('Inbox file fixture') : mode === 'BareTree' ? Buffer.from('Inbox tree content') : Buffer.from('Inbox ZIP content')
+        : mode === 'BareFile' ? Buffer.from('Server-side import fixture') : mode === 'BareTree' ? Buffer.from('Server tree content') : Buffer.from('Server ZIP content')
       if (!Buffer.from(imported.bytes).equals(expected)) throw new Error(`Server import ${mode} returned incorrect bytes`)
       if (mode === 'BareFile' && imported.artifactId !== `adfile:sha256:${createHash('sha256').update(expected).digest('hex')}`) {
         throw new Error('Server import File identity differs from original-byte identity')
       }
-      if (mode === 'BareFile') serverFileIdentity = imported.artifactId
+      if (rootId === 'shared' && mode === 'BareFile') serverFileIdentity = imported.artifactId
       if (mode === 'BareTree' && (!imported.inventory.includes('empty') || imported.path !== 'nested/content.txt')) {
         throw new Error('Server import did not retain Tree paths and empty directory')
       }
       if (mode === 'ZipImport' && imported.path !== 'zip/nested.txt') throw new Error('Server ZIP import path is incorrect')
+      if (rootId === 'inbox' && mode === 'BareFile') {
+        if ((await readFile(join(inboxPath, sourceName), 'utf8')) !== 'Inbox file fixture') throw new Error('Import modified Inbox source')
+        await rm(join(inboxPath, sourceName))
+        const afterRemoval = await page.evaluate(async artifactId => {
+          const response = await fetch(`/api/v1/artifacts/${encodeURIComponent(artifactId)}/content`)
+          if (!response.ok) throw new Error(`Registered Artifact vanished after source removal: ${response.status}`)
+          return Array.from(new Uint8Array(await response.arrayBuffer()))
+        }, imported.artifactId)
+        if (!Buffer.from(afterRemoval).equals(expected)) throw new Error('CAS Artifact changed after Inbox source removal')
+      }
     }
     await page.goto(`${base}upload/new-app`)
     await page.getByLabel('App name').fill('HTTP identity comparison')
@@ -1128,25 +1190,29 @@ try {
     if (httpIdentity !== serverFileIdentity) throw new Error('HTTP and Server import created different File Artifact identities for the same bytes')
     const importBoundary = await page.evaluate(async () => {
       const invalidPath = await fetch('/api/v1/server-imports/roots/shared/entries?path=..%2Foutside')
+      const symlinkEscape = await fetch('/api/v1/server-imports/roots/inbox/entries?path=escape-managed-parent')
+      const inboxListing = await (await fetch('/api/v1/server-imports/roots/inbox/entries')).json()
       const session = await (await fetch('/api/v1/auth/sessions/current')).json()
       const noCsrf = await fetch('/api/v1/server-imports', { method: 'POST', headers: {
         'Content-Type': 'application/json', 'Idempotency-Key': 'missing-csrf' },
       body: JSON.stringify({ rootId: 'shared', path: 'server-file.txt', mode: 'BareFile', target: { newAppName: 'Denied import' } }) })
-      return { invalidPath: invalidPath.status, noCsrf: noCsrf.status, csrfPresent: !!session.csrfToken }
+      return { invalidPath: invalidPath.status, symlinkEscape: symlinkEscape.status,
+        symlinkListed: inboxListing.items.some(item => item.name === 'escape-managed-parent'), noCsrf: noCsrf.status, csrfPresent: !!session.csrfToken }
     })
-    if (importBoundary.invalidPath !== 400 || importBoundary.noCsrf !== 403 || !importBoundary.csrfPresent) {
+    if (importBoundary.invalidPath !== 400 || importBoundary.symlinkEscape !== 400 || importBoundary.symlinkListed || importBoundary.noCsrf !== 403 || !importBoundary.csrfPresent) {
       throw new Error(`Server import path or CSRF boundary failed: ${JSON.stringify(importBoundary)}`)
     }
     const readerRoots = await reader.evaluate(async () => {
       const list = await fetch('/api/v1/server-imports/roots')
       const page = await fetch('/api/v1/server-imports/roots/shared/entries')
+      const adminSources = await fetch('/api/v1/admin/import-sources')
       const session = await (await fetch('/api/v1/auth/sessions/current')).json()
       const start = await fetch('/api/v1/server-imports', { method: 'POST', headers: {
         'Content-Type': 'application/json', 'X-CSRF-Token': session.csrfToken, 'Idempotency-Key': 'reader-denied-import' },
       body: JSON.stringify({ rootId: 'shared', path: 'server-file.txt', mode: 'BareFile', target: { newAppName: 'Denied' } }) })
-      return { list: list.status, roots: (await list.json()).items, page: page.status, start: start.status }
+      return { list: list.status, roots: (await list.json()).items, page: page.status, adminSources: adminSources.status, start: start.status }
     })
-    if (readerRoots.list !== 200 || readerRoots.roots.length || readerRoots.page !== 404 || readerRoots.start !== 404) {
+    if (readerRoots.list !== 200 || readerRoots.roots.length || readerRoots.page !== 404 || readerRoots.adminSources !== 403 || readerRoots.start !== 404) {
       throw new Error(`Server import root authorization failed: ${JSON.stringify(readerRoots)}`)
     }
     const changingPath = join(preview.importSource, 'changing.bin')
