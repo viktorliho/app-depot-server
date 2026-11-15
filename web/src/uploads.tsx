@@ -11,7 +11,7 @@ import { bytesToHex } from '@noble/hashes/utils'
 import { isOsMetadataPath, pathOrder, selectTreeFiles } from './upload-selection'
 
 type Mode = 'BareFile' | 'BareTree' | 'ZipImport'
-type Capabilities = { ingestionModes: Mode[]; limits: { maxPageSize: number; maxUploadBytes: number } }
+type Capabilities = { ingestionModes: Mode[]; features: string[]; limits: { maxPageSize: number; maxUploadBytes: number } }
 type SelectedFile = { file: File; path: string; size: number; lastModified: number }
 type PreparedFile = SelectedFile & { hash: string }
 type Keys = { fingerprint: string; create: string; complete: string; finalize: string; publish: string; inventory: string[]; cancel: string }
@@ -320,7 +320,9 @@ export function UploadPage({ target }: { target: 'new-app' | 'app' | 'release' }
     } finally { setBusy(false); controller.current = null }
   }
   const heading = target === 'release' ? 'Upload Artifact' : target === 'app' ? 'Add release from file' : 'Upload a new application'
+  const importRoute = target === 'release' ? `/apps/${app?.id}/releases/${releaseId}/imports/new` : target === 'app' ? `/apps/${app?.id}/imports/new` : '/import/new-app'
   return <><PageHeader title={heading} description={target === 'release' ? `Register an Artifact in the selected Draft release of ${app?.name}.` : target === 'app' ? `Create a Draft release in ${app?.name} from an Artifact.` : 'Create an application and Draft release from an Artifact.'} />
+    <div className="form-actions section-action"><strong>Upload from this device</strong>{capabilities.value?.features.includes('serverImport') && <ActionLink to={importRoute} secondary>Import from server storage</ActionLink>}</div>
     {target === 'release' && release.loading ? <LoadingState /> : target === 'release' && release.error ? <ProblemNotice error={release.error} retry={release.retry} /> : target === 'release' && (release.value?.state !== 'Draft' || release.value.appId !== app?.id) ? <ProblemNotice error={new Error('The selected Draft release is unavailable in this application.')} /> : capabilities.loading ? <LoadingState label="Checking upload capabilities…" /> : capabilities.error ? <ProblemNotice error={capabilities.error} retry={capabilities.retry} /> :
       !canManage || (target === 'new-app' && !canCreate) ? <ProblemNotice error={new Error('You do not have permission to upload to this target.')} /> : <section className="panel form-panel">
         <p>Choose one ingestion mode. Registration creates or updates a Draft release; publication is a separate explicit action.</p>

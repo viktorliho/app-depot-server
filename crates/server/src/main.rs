@@ -30,6 +30,8 @@ mod config;
 mod declarations;
 mod diagnostics;
 mod download;
+mod import_source;
+mod server_import;
 mod upload;
 
 fn usage() -> ! {
@@ -232,9 +234,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 coordinator: coordinator.clone(),
                 root: Arc::new(lock.path.clone()),
             };
+            let import_roots = Arc::new(import_source::load_roots(&lock.path)?);
             let download_state = download::DownloadState {
                 auth: auth_state.clone(),
                 root: Arc::new(lock.path.clone()),
+                import_enabled: !import_roots.is_empty(),
             };
             let bind: SocketAddr = if let Some(config) = &production_config {
                 config.bind
@@ -266,6 +270,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     auth: auth_state.clone(),
                     metrics: metrics.clone(),
                     root: lock.path.clone(),
+                }))
+                .merge(server_import::router(server_import::ImportState {
+                    auth: auth_state.clone(),
+                    coordinator: coordinator.clone(),
+                    roots: import_roots,
+                    active: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+                    permits: Arc::new(tokio::sync::Semaphore::new(2)),
                 }))
                 .merge(channels::router(auth_state))
                 .merge(upload::router(upload_state))

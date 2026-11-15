@@ -1,7 +1,7 @@
 import { chromium } from 'playwright-core'
 import { createHash, randomUUID } from 'node:crypto'
 import { execFileSync, spawn } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, open, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -110,6 +110,13 @@ async function startLanPreview() {
   const repository = fileURLToPath(new URL('../..', import.meta.url))
   const binary = join(repository, 'target/debug/app-depot-server')
   const namespace = await mkdtemp(join(tmpdir(), 'app-depot-lan-smoke-'))
+  const importSource = await mkdtemp(join(tmpdir(), 'app-depot-import-source-'))
+  await writeFile(join(importSource, 'server-file.txt'), 'Server-side import fixture')
+  await mkdir(join(importSource, 'server-tree/empty'), { recursive: true })
+  await mkdir(join(importSource, 'server-tree/nested'), { recursive: true })
+  await writeFile(join(importSource, 'server-tree/nested/content.txt'), 'Server tree content')
+  execFileSync('python3', ['-c', 'import sys,zipfile; z=zipfile.ZipFile(sys.argv[1],"w",zipfile.ZIP_DEFLATED); z.writestr("zip/nested.txt","Server ZIP content"); z.close()', join(importSource, 'server.zip')])
+  const importRoots = JSON.stringify([{ id: 'shared', path: await realpath(importSource), allowedUserIds: [] }])
   const listener = createServer()
   await new Promise(resolve => listener.listen(0, '127.0.0.1', resolve))
   const port = listener.address().port
@@ -118,7 +125,8 @@ async function startLanPreview() {
   try {
     execFileSync(binary, ['init-preview', '--namespace', namespace, '--instance', 'preview'])
     server = spawn(binary, ['serve', '--namespace', namespace, '--instance', 'preview', '--mode', 'preview',
-      '--bind', `127.0.0.1:${port}`, '--assets', join(repository, 'web/dist')], { stdio: ['ignore', 'pipe', 'pipe'] })
+      '--bind', `127.0.0.1:${port}`, '--assets', join(repository, 'web/dist')], { stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, APP_DEPOT_IMPORT_ROOTS: importRoots } })
     let output = ''
     let errors = ''
     server.stderr.on('data', chunk => { errors = (errors + chunk.toString()).slice(-2000) })
@@ -143,7 +151,7 @@ async function startLanPreview() {
     while (Date.now() < deadline) {
       try {
         const response = await fetch(`http://127.0.0.1:${port}/api/v1/health/ready`)
-        if (response.ok) return { namespace, server, token, base: `http://app-depot.test:${port}/`, binary, port, repository }
+        if (response.ok) return { namespace, importSource, importRoots, server, token, base: `http://app-depot.test:${port}/`, binary, port, repository }
       } catch { /* Startup is still in progress. */ }
       await new Promise(resolve => setTimeout(resolve, 100))
     }
@@ -154,15 +162,19 @@ async function startLanPreview() {
       await new Promise(resolve => server.once('exit', resolve))
     }
     await rm(namespace, { recursive: true, force: true })
+    await rm(importSource, { recursive: true, force: true })
     throw error
   }
 }
 
 async function restartLanPreview(preview) {
-  preview.server.kill('SIGTERM')
-  await new Promise(resolve => preview.server.once('exit', resolve))
+  if (preview.server.exitCode === null && preview.server.signalCode === null) {
+    preview.server.kill('SIGTERM')
+    await new Promise(resolve => preview.server.once('exit', resolve))
+  }
   preview.server = spawn(preview.binary, ['serve', '--namespace', preview.namespace, '--instance', 'preview', '--mode', 'preview',
-    '--bind', `127.0.0.1:${preview.port}`, '--assets', join(preview.repository, 'web/dist')], { stdio: ['ignore', 'pipe', 'pipe'] })
+    '--bind', `127.0.0.1:${preview.port}`, '--assets', join(preview.repository, 'web/dist')], { stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, APP_DEPOT_IMPORT_ROOTS: preview.importRoots } })
   const deadline = Date.now() + 15000
   while (Date.now() < deadline) {
     if (preview.server.exitCode !== null) throw new Error(`Preview restart exited ${preview.server.exitCode}`)
@@ -1051,6 +1063,193 @@ try {
     await page.getByRole('button', { name: 'Next page' }).click()
     await page.getByRole('button', { name: 'Previous page' }).click()
     await page.getByRole('heading', { name: 'Users & Access' }).waitFor()
+    let serverFileIdentity
+    for (const [sourceName, mode, appName] of [
+      ['server-file.txt', 'BareFile', 'Server imported file'],
+      ['server-tree', 'BareTree', 'Server imported tree'],
+      ['server.zip', 'ZipImport', 'Server imported ZIP']
+    ]) {
+      await page.goto(`${base}import/new-app`)
+      await page.getByRole('heading', { name: 'Import from server storage' }).waitFor()
+      await page.getByLabel('App name').fill(appName)
+      await page.getByRole('button', { name: sourceName }).click()
+      if (mode === 'BareTree') await page.getByRole('button', { name: 'Select this directory' }).click()
+      if (mode === 'ZipImport') await page.getByLabel('Import as').selectOption('ZipImport')
+      await page.getByRole('button', { name: 'Import and save Draft' }).click()
+      try { await page.getByRole('heading', { name: 'Completed' }).waitFor({ timeout: 30000 }) }
+      catch { throw new Error(`Server import ${mode} did not complete: ${(await page.locator('body').innerText()).slice(-1200)}`) }
+      const releaseLink = page.getByRole('link', { name: 'Open release' })
+      await releaseLink.waitFor()
+      const importedReleaseId = (await releaseLink.getAttribute('href')).split('/').pop()
+      const imported = await page.evaluate(async ({ releaseId, mode }) => {
+        const associationResponse = await fetch(`/api/v1/releases/${releaseId}/artifacts?pageSize=100`)
+        if (!associationResponse.ok) throw new Error(`Imported associations unavailable: ${associationResponse.status}`)
+        const associations = await associationResponse.json()
+        if (associations.items.length !== 1) throw new Error(`Expected one imported Artifact, found ${associations.items.length}`)
+        const artifactId = associations.items[0].artifactId
+        if (mode === 'BareFile') {
+          const response = await fetch(`/api/v1/artifacts/${encodeURIComponent(artifactId)}/content`)
+          if (!response.ok) throw new Error(`Imported File download failed: ${response.status}`)
+          return { artifactId, bytes: Array.from(new Uint8Array(await response.arrayBuffer())) }
+        }
+        const inventoryResponse = await fetch(`/api/v1/artifacts/${encodeURIComponent(artifactId)}/inventory?pageSize=100`)
+        if (!inventoryResponse.ok) throw new Error(`Imported Tree inventory failed: ${inventoryResponse.status}`)
+        const inventory = await inventoryResponse.json()
+        const file = inventory.items.find(item => item.type === 'File')
+        if (!file) throw new Error('Imported Tree has no file')
+        const response = await fetch(`/api/v1/artifacts/${encodeURIComponent(artifactId)}/files/${encodeURIComponent(file.fileId)}`)
+        if (!response.ok) throw new Error(`Imported Tree file download failed: ${response.status}`)
+        return { artifactId, inventory: inventory.items.map(item => item.path), path: file.path,
+          bytes: Array.from(new Uint8Array(await response.arrayBuffer())) }
+      }, { releaseId: importedReleaseId, mode })
+      const expected = mode === 'BareFile' ? Buffer.from('Server-side import fixture')
+        : mode === 'BareTree' ? Buffer.from('Server tree content') : Buffer.from('Server ZIP content')
+      if (!Buffer.from(imported.bytes).equals(expected)) throw new Error(`Server import ${mode} returned incorrect bytes`)
+      if (mode === 'BareFile' && imported.artifactId !== `adfile:sha256:${createHash('sha256').update(expected).digest('hex')}`) {
+        throw new Error('Server import File identity differs from original-byte identity')
+      }
+      if (mode === 'BareFile') serverFileIdentity = imported.artifactId
+      if (mode === 'BareTree' && (!imported.inventory.includes('empty') || imported.path !== 'nested/content.txt')) {
+        throw new Error('Server import did not retain Tree paths and empty directory')
+      }
+      if (mode === 'ZipImport' && imported.path !== 'zip/nested.txt') throw new Error('Server ZIP import path is incorrect')
+    }
+    await page.goto(`${base}upload/new-app`)
+    await page.getByLabel('App name').fill('HTTP identity comparison')
+    await page.getByLabel('File', { exact: true }).setInputFiles({ name: 'server-file.txt', mimeType: 'text/plain', buffer: Buffer.from('Server-side import fixture') })
+    await page.getByRole('button', { name: 'Save Draft' }).click()
+    await page.getByRole('link', { name: 'Open release' }).waitFor()
+    const httpReleaseId = (await page.getByRole('link', { name: 'Open release' }).getAttribute('href')).split('/').pop()
+    const httpIdentity = await page.evaluate(async id => {
+      const response = await fetch(`/api/v1/releases/${id}/artifacts?pageSize=100`)
+      if (!response.ok) throw new Error(`HTTP upload association unavailable: ${response.status}`)
+      return (await response.json()).items[0].artifactId
+    }, httpReleaseId)
+    if (httpIdentity !== serverFileIdentity) throw new Error('HTTP and Server import created different File Artifact identities for the same bytes')
+    const importBoundary = await page.evaluate(async () => {
+      const invalidPath = await fetch('/api/v1/server-imports/roots/shared/entries?path=..%2Foutside')
+      const session = await (await fetch('/api/v1/auth/sessions/current')).json()
+      const noCsrf = await fetch('/api/v1/server-imports', { method: 'POST', headers: {
+        'Content-Type': 'application/json', 'Idempotency-Key': 'missing-csrf' },
+      body: JSON.stringify({ rootId: 'shared', path: 'server-file.txt', mode: 'BareFile', target: { newAppName: 'Denied import' } }) })
+      return { invalidPath: invalidPath.status, noCsrf: noCsrf.status, csrfPresent: !!session.csrfToken }
+    })
+    if (importBoundary.invalidPath !== 400 || importBoundary.noCsrf !== 403 || !importBoundary.csrfPresent) {
+      throw new Error(`Server import path or CSRF boundary failed: ${JSON.stringify(importBoundary)}`)
+    }
+    const readerRoots = await reader.evaluate(async () => {
+      const list = await fetch('/api/v1/server-imports/roots')
+      const page = await fetch('/api/v1/server-imports/roots/shared/entries')
+      const session = await (await fetch('/api/v1/auth/sessions/current')).json()
+      const start = await fetch('/api/v1/server-imports', { method: 'POST', headers: {
+        'Content-Type': 'application/json', 'X-CSRF-Token': session.csrfToken, 'Idempotency-Key': 'reader-denied-import' },
+      body: JSON.stringify({ rootId: 'shared', path: 'server-file.txt', mode: 'BareFile', target: { newAppName: 'Denied' } }) })
+      return { list: list.status, roots: (await list.json()).items, page: page.status, start: start.status }
+    })
+    if (readerRoots.list !== 200 || readerRoots.roots.length || readerRoots.page !== 404 || readerRoots.start !== 404) {
+      throw new Error(`Server import root authorization failed: ${JSON.stringify(readerRoots)}`)
+    }
+    const changingPath = join(preview.importSource, 'changing.bin')
+    const changingFile = await open(changingPath, 'w')
+    await changingFile.truncate(64 * 1024 * 1024)
+    await changingFile.close()
+    await page.exposeFunction('changeImportSource', async () => {
+      const file = await open(changingPath, 'r+')
+      await file.write(Buffer.from('changed'), 0, 7, 0)
+      await file.close()
+    })
+    const changedImport = await page.evaluate(async key => {
+      const session = await (await fetch('/api/v1/auth/sessions/current')).json()
+      const response = await fetch('/api/v1/server-imports', { method: 'POST', headers: {
+        'Content-Type': 'application/json', 'X-CSRF-Token': session.csrfToken, 'Idempotency-Key': key },
+      body: JSON.stringify({ rootId: 'shared', path: 'changing.bin', mode: 'BareFile', target: { newAppName: 'Changed server source' } }) })
+      if (!response.ok || !response.body) throw new Error(`Changed-source fixture failed to start: ${response.status}`)
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffered = ''
+      let changed = false
+      for (;;) {
+        const chunk = await reader.read()
+        if (chunk.done) throw new Error('Changed-source import ended without a terminal event')
+        buffered += decoder.decode(chunk.value)
+        let boundary
+        while ((boundary = buffered.indexOf('\n')) >= 0) {
+          const line = buffered.slice(0, boundary)
+          buffered = buffered.slice(boundary + 1)
+          if (!line.startsWith('data: ')) continue
+          const event = JSON.parse(line.slice(6))
+          if (event.phase === 'Receiving' && !changed) {
+            changed = true
+            await window.changeImportSource()
+          }
+          if (event.phase === 'Failed' || event.phase === 'Completed') return event
+        }
+      }
+    }, randomUUID())
+    if (changedImport.phase !== 'Failed' || !['source_changed', 'hash_mismatch'].includes(changedImport.problem?.code)) {
+      throw new Error(`Changed Server source was not rejected: ${JSON.stringify(changedImport)}`)
+    }
+    const restartFile = await open(join(preview.importSource, 'restart.bin'), 'w')
+    await restartFile.truncate(128 * 1024 * 1024)
+    await restartFile.close()
+    const restartKey = randomUUID()
+    const restartRequest = { rootId: 'shared', path: 'restart.bin', mode: 'BareFile', target: { newAppName: 'Restarted server import' } }
+    const startedSession = await page.evaluate(async ({ key, body }) => {
+      const session = await (await fetch('/api/v1/auth/sessions/current')).json()
+      const response = await fetch('/api/v1/server-imports', { method: 'POST', headers: {
+        'Content-Type': 'application/json', 'X-CSRF-Token': session.csrfToken, 'Idempotency-Key': key }, body: JSON.stringify(body) })
+      if (!response.ok || !response.body) throw new Error(`Restart import start failed: ${response.status}`)
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let text = ''
+      for (;;) {
+        const chunk = await reader.read()
+        if (chunk.done) throw new Error('Import ended before a resumable session was created')
+        text += decoder.decode(chunk.value)
+        let boundary
+        while ((boundary = text.indexOf('\n')) >= 0) {
+          const line = text.slice(0, boundary)
+          text = text.slice(boundary + 1)
+          if (!line.startsWith('data: ')) continue
+          const event = JSON.parse(line.slice(6))
+          if (event.phase === 'Receiving' && event.sessionId) {
+            await reader.cancel()
+            return event.sessionId
+          }
+        }
+      }
+    }, { key: restartKey, body: restartRequest })
+    preview.server.kill('SIGKILL')
+    await new Promise(resolve => preview.server.once('exit', resolve))
+    await restartLanPreview(preview)
+    await page.reload()
+    const resumed = await page.evaluate(async ({ key, body }) => {
+      const session = await (await fetch('/api/v1/auth/sessions/current')).json()
+      const response = await fetch('/api/v1/server-imports', { method: 'POST', headers: {
+        'Content-Type': 'application/json', 'X-CSRF-Token': session.csrfToken, 'Idempotency-Key': key }, body: JSON.stringify(body) })
+      if (!response.ok) throw new Error(`Import retry failed: ${response.status}`)
+      return (await response.text()).split('\n').filter(line => line.startsWith('data: ')).map(line => JSON.parse(line.slice(6)))
+    }, { key: restartKey, body: restartRequest })
+    if (resumed.at(-1)?.result?.phase !== 'Completed' || resumed.at(-1)?.sessionId !== startedSession) {
+      throw new Error(`Interrupted Server import did not resume its session: ${JSON.stringify(resumed.at(-1))}`)
+    }
+    const cancelled = await page.evaluate(async key => {
+      const session = await (await fetch('/api/v1/auth/sessions/current')).json()
+      const started = await fetch('/api/v1/server-imports', { method: 'POST', headers: {
+        'Content-Type': 'application/json', 'X-CSRF-Token': session.csrfToken, 'Idempotency-Key': key },
+      body: JSON.stringify({ rootId: 'shared', path: 'restart.bin', mode: 'BareFile', target: { newAppName: 'Cancelled server import' } }) })
+      if (!started.ok) throw new Error(`Cancel fixture failed to start: ${started.status}`)
+      const stop = await fetch('/api/v1/server-imports', { method: 'DELETE', headers: {
+        'Content-Type': 'application/json', 'X-CSRF-Token': session.csrfToken }, body: JSON.stringify({ requestKey: key }) })
+      if (stop.status !== 202) throw new Error(`Active import cancellation was not accepted: ${stop.status}`)
+      const events = (await started.text()).split('\n').filter(line => line.startsWith('data: ')).map(line => JSON.parse(line.slice(6)))
+      return events.at(-1)
+    }, randomUUID())
+    if (cancelled?.phase !== 'Failed' || cancelled.problem?.code !== 'session_cancelled') {
+      throw new Error(`Cancelled Server import did not stop safely: ${JSON.stringify(cancelled)}`)
+    }
+    await reader.goto(`${base}import/new-app`)
+    await reader.getByText('You do not have permission to import to this target.').waitFor()
   }
   await reader.locator('.account-menu summary').click()
   await reader.locator('.account-menu').getByRole('button', { name: 'Sign out' }).click()
@@ -1072,5 +1271,6 @@ try {
       await new Promise(resolve => preview.server.once('exit', resolve))
     }
     await rm(preview.namespace, { recursive: true, force: true })
+    await rm(preview.importSource, { recursive: true, force: true })
   }
 }

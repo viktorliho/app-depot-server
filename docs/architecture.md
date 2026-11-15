@@ -82,6 +82,8 @@ The catalog supports App, Release and Artifact discovery, optional channel resol
 
 **Transport-archive import** is explicitly selected. The MVP supports only ZIP with Store and Deflate compression methods. The publisher creates the archive; the Server does not create publisher upload bundles, and bundle creation tools and packaging policy are outside its responsibilities. The Server receives the complete ZIP in temporary storage, verifies the archive, safely parses and validates its contents, registers the resulting file tree in CAS, then removes the temporary ZIP after successful registration. The transport ZIP is not a mandatory App Depot application format. Embedded declarations are not required; ordinary ZIP upload never switches to import automatically.
 
+**Server-storage import** reads a selected regular file, directory, or explicitly selected ZIP from an operator-configured read-only import root. Logical root IDs and per-user allowlists govern source browsing and selection; HTTP clients never supply absolute host paths. The Server scans and verifies source bytes, then uses the same resumable staging, independent verification, CAS promotion and registration path as HTTP upload. A file, tree and ZIP-content import produce the same Artifact identities as their HTTP counterparts. Source content is never modified and is not a dependency of a completed Artifact. An opaque ZIP file remains a File Artifact unless ZIP-content import is explicitly selected.
+
 Equivalent relative paths, file bytes, directory structure and executable flags yield the same canonical tree identity through bare ingestion and ZIP import. The ingestion method is absent from Artifact content identity.
 
 ## 12. Upload sessions, integrity and registration

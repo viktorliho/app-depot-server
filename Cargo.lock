@@ -71,6 +71,7 @@ dependencies = [
  "futures-util",
  "hex",
  "hmac",
+ "libc",
  "rand",
  "serde",
  "serde_json",

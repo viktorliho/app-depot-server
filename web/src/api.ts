@@ -27,7 +27,7 @@ export type BackupSummary = { id: string; formatVersion: number; capturedAt: str
 export type BackupMember = { entryId: string; kind: 'SqliteSnapshot' | 'CasObject'; relativePath: string; size: number; sha256: string }
 export type BackupManifest = { formatVersion: number; backupId: string; capturedAt: string; catalogFormatVersion: number; members: BackupMember[] }
 export type UploadSession = { id: string; operationId: string; file?: { fileId: string } | null; phase: string; inventoryComplete: boolean }
-export type FinalizationResult = { phase: string; appId?: string; releaseId?: string; artifactId?: string; associationId?: string; problem?: { title: string; detail?: string; code?: string } }
+export type FinalizationResult = { phase: string; sessionId?: string; operationId?: string; appId?: string; releaseId?: string; artifactId?: string; associationId?: string; problem?: { title: string; detail?: string; code?: string } }
 
 export class ApiError extends Error {
   constructor(public status: number, public code: string, title: string, public detail?: string) {

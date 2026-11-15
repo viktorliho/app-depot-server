@@ -3619,6 +3619,150 @@ paths:
       - {}
       - bearerAuth: []
       - cookieAuth: []
+  /server-imports/roots:
+    get:
+      operationId: listServerImportRoots
+      tags: [Uploads]
+      summary: List import roots authorized for the current user
+      description: Returns logical IDs only; physical host paths are never exposed.
+      responses:
+        '200':
+          description: Authorized roots. An empty list means no root is available to this user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServerImportRoots'
+        default:
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+  /server-imports/roots/{id}/entries:
+    get:
+      operationId: browseServerImportRoot
+      tags: [Uploads]
+      summary: Browse one authorized import root
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+      - name: path
+        in: query
+        schema: { type: string }
+        description: Portable path below the root; empty selects the root directory.
+      - name: cursor
+        in: query
+        schema: { type: string }
+      - name: pageSize
+        in: query
+        schema: { type: integer, minimum: 1, maximum: 200 }
+      responses:
+        '200':
+          description: Regular files and directories only, ordered by original UTF-8 name.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServerSourcePage'
+        default:
+          description: RFC 9457 Problem Details; unavailable and forbidden roots are both hidden as 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+  /server-imports:
+    post:
+      operationId: importFromServerStorage
+      tags: [Uploads]
+      summary: Import approved Server-side content through the existing upload and CAS pipeline
+      description: >-
+        The response is a stream of SSE data frames containing ServerImportProgress JSON.
+        Scanning is indeterminate. Receiving reports authoritative staged bytes by file or
+        range; Verifying, Importing (ZIP) and Committing have no fabricated percentage.
+        An exact retry uses the same key and request; after interruption, retry rechecks
+        the source and resumes only authoritative upload ranges. Registration creates a
+        Draft Release and never publishes automatically. Source bytes are never modified.
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema: { type: string, minLength: 1, maxLength: 255 }
+      - name: X-CSRF-Token
+        in: header
+        schema: { type: string }
+        description: Required for cookie-authenticated requests.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ServerImportRequest'
+      responses:
+        '200':
+          description: SSE progress stream ending in Completed or Failed.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: Each data frame is ServerImportProgress JSON.
+        default:
+          description: RFC 9457 Problem Details for rejected requests before stream creation.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
+    delete:
+      operationId: cancelServerImport
+      tags: [Uploads]
+      summary: Cancel an active Server import by its request key
+      description: Cancellation before session creation stops scanning; after creation it uses the existing upload cancellation operation. A completed registration cannot be undone.
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        schema: { type: string }
+        description: Required for cookie-authenticated requests.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                requestKey: { type: string, minLength: 1, maxLength: 255 }
+              required: [requestKey]
+              additionalProperties: false
+      responses:
+        '200':
+          description: Completed registration won the cancellation race.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FinalizationResult'
+        '202':
+          description: Cancellation accepted; use the existing upload operation if a session was created.
+          content:
+            application/json:
+              schema:
+                type: object
+        default:
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+      security:
+      - bearerAuth: []
+      - cookieAuth: []
   /uploads:
     post:
       operationId: createUpload
@@ -5350,6 +5494,71 @@ components:
       - app
       - release
       - associations
+      additionalProperties: false
+    ServerImportRoots:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+            required: [id]
+            additionalProperties: false
+      required: [items]
+      additionalProperties: false
+    ServerSourcePage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              entryType: { type: string, enum: [File, Directory] }
+              size:
+                oneOf:
+                - { type: integer, minimum: 0 }
+                - { type: 'null' }
+            required: [name, entryType, size]
+            additionalProperties: false
+        nextCursor:
+          oneOf:
+          - { type: string }
+          - { type: 'null' }
+      required: [items, nextCursor]
+      additionalProperties: false
+    ServerImportRequest:
+      type: object
+      properties:
+        rootId: { type: string }
+        path: { type: string }
+        mode: { type: string, enum: [BareFile, BareTree, ZipImport] }
+        target:
+          $ref: '#/components/schemas/UploadTarget'
+      required: [rootId, path, mode, target]
+      additionalProperties: false
+    ServerImportProgress:
+      type: object
+      properties:
+        phase: { type: string, enum: [Scanning, Receiving, Verifying, Importing, Committing, Completed, Failed] }
+        sessionId: { type: string }
+        filesTotal: { type: integer, minimum: 0 }
+        filesProcessed: { type: integer, minimum: 0 }
+        bytesTotal: { type: integer, minimum: 0 }
+        bytesProcessed: { type: integer, minimum: 0 }
+        result:
+          $ref: '#/components/schemas/FinalizationResult'
+        problem:
+          type: object
+          properties:
+            code: { type: string }
+            title: { type: string }
+          required: [code, title]
+          additionalProperties: false
+      required: [phase]
       additionalProperties: false
     UploadCreate:
       oneOf:

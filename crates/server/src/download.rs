@@ -23,6 +23,7 @@ use tokio_util::io::ReaderStream;
 pub struct DownloadState {
     pub auth: AuthState,
     pub root: Arc<PathBuf>,
+    pub import_enabled: bool,
 }
 
 fn problem(status: StatusCode, code: &str, title: &str) -> Response {
@@ -352,10 +353,15 @@ pub(crate) async fn serve_file(
     Ok(response)
 }
 
-async fn capabilities() -> Json<serde_json::Value> {
+async fn capabilities(State(state): State<DownloadState>) -> Json<serde_json::Value> {
+    let features: Vec<&str> = if state.import_enabled {
+        vec!["serverImport"]
+    } else {
+        vec![]
+    };
     Json(
         json!({"apiVersion":"1.0.0","ingestionModes":["BareFile","BareTree","ZipImport"],"zipMethods":["Store","Deflate"],"treeIdentity":"adtree:v1:sha256","fileIdentity":"adfile:sha256","uploadRanges":true,"downloadRanges":true,
-        "limits":{"maxPageSize":1000,"maxConcurrentRanges":8,"maxUploadBytes":1125899906842624u64},"features":[]}),
+        "limits":{"maxPageSize":1000,"maxConcurrentRanges":8,"maxUploadBytes":1125899906842624u64},"features":features}),
     )
 }
 
