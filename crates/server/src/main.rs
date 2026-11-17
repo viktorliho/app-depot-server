@@ -338,6 +338,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Ok(()) => {
                         flag_for_recovery.store(true, Ordering::Release);
                         println!("{{\"event\":\"ready\"}}");
+                        #[cfg(debug_assertions)]
+                        eprintln!("{{\"event\":\"preview_worker_ready\"}}");
                         let mut interval =
                             tokio::time::interval(std::time::Duration::from_secs(30));
                         interval.tick().await;
@@ -347,6 +349,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 _ = cleanup_signal.notified() => {},
                                 _ = worker_shutdown_rx.changed() => break,
                             }
+                            #[cfg(debug_assertions)]
+                            eprintln!("{{\"event\":\"preview_worker_wakeup\"}}");
                             let cutoff = app_depot_infrastructure::auth::now() - idle_seconds;
                             let _boundary = backup_boundary.read().await;
                             if coordinator.maintenance(cutoff).await.is_err() {

@@ -220,7 +220,7 @@ const base = preview?.base || process.env.APP_DEPOT_BASE_URL || 'http://127.0.0.
 const insecureOrigin = selfHosted || process.env.APP_DEPOT_EXPECT_INSECURE_ORIGIN === '1'
 const pendingRequests = new Map()
 const failedRequests = []
-async function diagnosePreview() {
+async function diagnosePreview(page, appId) {
   const endpoints = {}
   for (const [name, path] of Object.entries({ ready: '/api/v1/health/ready', document: '/' })) {
     if (!preview) break
@@ -229,6 +229,16 @@ async function diagnosePreview() {
       endpoints[name] = response.status
       await response.arrayBuffer()
     } catch (error) { endpoints[name] = error instanceof Error ? error.name : String(error) }
+  }
+  if (preview && page && appId) {
+    try {
+      const cookie = (await page.context().cookies(preview.base)).find(item => item.name === 'ad_session')
+      const response = await fetch(`http://127.0.0.1:${preview.port}/api/v1/apps/${appId}`, {
+        headers: cookie ? { Cookie: `ad_session=${cookie.value}` } : {}, signal: AbortSignal.timeout(3000),
+      })
+      endpoints.catalog = response.status
+      await response.arrayBuffer()
+    } catch (error) { endpoints.catalog = error instanceof Error ? error.name : String(error) }
   }
   let serverProcess
   if (preview?.server.pid) {
@@ -825,7 +835,7 @@ try {
     await response.arrayBuffer()
     return response.status
   }, draftId).catch(async failure => {
-    throw new Error(`Catalog request stalled after immutable association rejection: ${JSON.stringify(await diagnosePreview())}`, { cause: failure })
+    throw new Error(`Catalog request stalled after immutable association rejection: ${JSON.stringify(await diagnosePreview(page, draftId))}`, { cause: failure })
   })
   if (catalogAfterRejection !== 200) throw new Error(`Catalog did not recover after immutable association rejection: ${catalogAfterRejection}`)
   stage('checking published Artifact Explorer and declaration edit')
@@ -833,7 +843,7 @@ try {
   // actual API-backed screen. Waiting for every image to load can stall the
   // navigation without telling us whether the Explorer itself works.
   await page.goto(`${base}apps/${draftId}/releases/${releaseId}/artifacts/${treeAssociationId}`, { waitUntil: 'domcontentloaded' }).catch(async failure => {
-    throw new Error(`Explorer navigation stalled: ${JSON.stringify(await diagnosePreview())}`, { cause: failure })
+    throw new Error(`Explorer navigation stalled: ${JSON.stringify(await diagnosePreview(page, draftId))}`, { cause: failure })
   })
   await page.getByRole('heading', { name: 'Artifact Explorer' }).waitFor().catch(async failure => {
     const details = await page.evaluate(async ({ appId, releaseId, associationId }) => {
@@ -845,7 +855,7 @@ try {
       })))
       return { route: location.pathname, screen: document.querySelector('main')?.innerText.slice(0, 800), statuses }
     }, { appId: draftId, releaseId, associationId: treeAssociationId }).catch(error => ({ diagnosticError: String(error) }))
-    throw new Error(`Published Artifact Explorer did not open: ${JSON.stringify({ ...details, preview: await diagnosePreview() })}`, { cause: failure })
+    throw new Error(`Published Artifact Explorer did not open: ${JSON.stringify({ ...details, preview: await diagnosePreview(page, draftId) })}`, { cause: failure })
   })
   await page.getByLabel('Label (optional)').fill('Published script')
   await page.getByRole('button', { name: 'Save entry points' }).click()
