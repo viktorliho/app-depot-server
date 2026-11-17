@@ -139,10 +139,10 @@ async function startLanPreview() {
     execFileSync(binary, ['init-preview', '--namespace', namespace, '--instance', 'preview'])
     server = spawn(binary, ['serve', '--namespace', namespace, '--instance', 'preview', '--mode', 'preview',
       '--bind', `127.0.0.1:${port}`, '--assets', join(repository, 'web/dist')], { stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, APP_DEPOT_IMPORT_ROOTS: importRoots } })
+      env: { ...process.env, APP_DEPOT_IMPORT_ROOTS: importRoots, APP_DEPOT_SMOKE_TRACE: '1' } })
     let output = ''
     let errors = ''
-    server.stderr.on('data', chunk => { errors = (errors + chunk.toString()).slice(-2000) })
+    server.stderr.on('data', chunk => { errors = (errors + chunk.toString()).slice(-8000) })
     let timeoutId
     const token = await Promise.race([
       new Promise((resolve, reject) => {
@@ -181,7 +181,7 @@ async function restartLanPreview(preview) {
   await stopServer(preview.server, 'Preview Server before restart')
   preview.server = spawn(preview.binary, ['serve', '--namespace', preview.namespace, '--instance', 'preview', '--mode', 'preview',
     '--bind', `127.0.0.1:${preview.port}`, '--assets', join(preview.repository, 'web/dist')], { stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, APP_DEPOT_IMPORT_ROOTS: preview.importRoots } })
+    env: { ...process.env, APP_DEPOT_IMPORT_ROOTS: preview.importRoots, APP_DEPOT_SMOKE_TRACE: '1' } })
   const deadline = Date.now() + 15000
   while (Date.now() < deadline) {
     if (preview.server.exitCode !== null) throw new Error(`Preview restart exited ${preview.server.exitCode}`)

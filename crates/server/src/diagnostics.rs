@@ -1,6 +1,6 @@
 use crate::auth::{authorize, ApiError, AuthState};
 use axum::{
-    extract::{Request, State},
+    extract::{MatchedPath, Request, State},
     http::{header, HeaderMap, HeaderValue, Method},
     middleware::Next,
     response::Response,
@@ -62,6 +62,15 @@ pub async fn observe(
 ) -> Response {
     let request_id = uuid::Uuid::new_v4().to_string();
     let method = request.method().as_str().to_owned();
+    let smoke_trace = cfg!(debug_assertions) && std::env::var_os("APP_DEPOT_SMOKE_TRACE").is_some();
+    let route = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map(MatchedPath::as_str)
+        .unwrap_or("unmatched");
+    if smoke_trace {
+        eprintln!("{{\"event\":\"smoke_request_start\",\"id\":\"{}\",\"method\":\"{}\",\"route\":\"{}\"}}", &request_id[..8], method, route);
+    }
     let requested_operation = request
         .uri()
         .path()
@@ -76,6 +85,13 @@ pub async fn observe(
     }
     let started = Instant::now();
     let mut response = next.run(request).await;
+    if smoke_trace {
+        eprintln!(
+            "{{\"event\":\"smoke_request_done\",\"id\":\"{}\",\"status\":{}}}",
+            &request_id[..8],
+            response.status().as_u16()
+        );
+    }
     if transfer {
         metrics.active_transfers.fetch_sub(1, Ordering::AcqRel);
     }
