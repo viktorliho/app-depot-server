@@ -164,7 +164,7 @@ async function startLanPreview() {
     while (Date.now() < deadline) {
       try {
         const response = await fetch(`http://127.0.0.1:${port}/api/v1/health/ready`)
-        if (response.ok) return { namespace, importSource, importRoots, server, token, base: `http://app-depot.test:${port}/`, binary, port, repository }
+        if (response.ok) return { namespace, importSource, importRoots, server, token, base: `http://app-depot.test:${port}/`, binary, port, repository, serverErrors: () => errors }
       } catch { /* Startup is still in progress. */ }
       await new Promise(resolve => setTimeout(resolve, 100))
     }
@@ -218,11 +218,40 @@ const setupToken = preview?.token || process.env.APP_DEPOT_SETUP_TOKEN
 const password = process.env.APP_DEPOT_TEST_PASSWORD || 'browser smoke password 12345'
 const base = preview?.base || process.env.APP_DEPOT_BASE_URL || 'http://127.0.0.1:8787/'
 const insecureOrigin = selfHosted || process.env.APP_DEPOT_EXPECT_INSECURE_ORIGIN === '1'
+const pendingRequests = new Map()
+const failedRequests = []
+async function diagnosePreview() {
+  const endpoints = {}
+  for (const [name, path] of Object.entries({ ready: '/api/v1/health/ready', document: '/' })) {
+    if (!preview) break
+    try {
+      const response = await fetch(`http://127.0.0.1:${preview.port}${path}`, { signal: AbortSignal.timeout(3000) })
+      endpoints[name] = response.status
+      await response.arrayBuffer()
+    } catch (error) { endpoints[name] = error instanceof Error ? error.name : String(error) }
+  }
+  let serverProcess
+  if (preview?.server.pid) {
+    try { serverProcess = execFileSync('ps', ['-p', String(preview.server.pid), '-o', 'pid,stat,etime,%cpu,%mem,comm'], { encoding: 'utf8' }).trim() }
+    catch (error) { serverProcess = error instanceof Error ? error.message : String(error) }
+  }
+  return { endpoints, serverExit: preview?.server.exitCode, serverSignal: preview?.server.signalCode,
+    serverProcess, serverErrors: preview?.serverErrors?.(),
+    pendingRequests: [...pendingRequests.values()].map(request => new URL(request.url()).pathname).slice(-15),
+    failedRequests: failedRequests.slice(-10) }
+}
 let browser
 try {
   browser = await chromium.launch({ executablePath: browserPath, headless: true,
     args: insecureOrigin ? ['--host-resolver-rules=MAP app-depot.test 127.0.0.1', '--no-proxy-server'] : [] })
   const page = await browser.newPage()
+  page.on('request', request => pendingRequests.set(request, request))
+  page.on('requestfinished', request => pendingRequests.delete(request))
+  page.on('requestfailed', request => {
+    pendingRequests.delete(request)
+    failedRequests.push({ path: new URL(request.url()).pathname, failure: request.failure()?.errorText })
+    if (failedRequests.length > 20) failedRequests.shift()
+  })
   await page.goto(base)
   const context = await page.evaluate(() => ({ secure: isSecureContext, randomUuid: typeof crypto.randomUUID,
     randomValues: typeof crypto.getRandomValues }))
@@ -795,13 +824,17 @@ try {
     const response = await fetch(`/api/v1/apps/${id}`, { signal: AbortSignal.timeout(5000) })
     await response.arrayBuffer()
     return response.status
-  }, draftId)
+  }, draftId).catch(async failure => {
+    throw new Error(`Catalog request stalled after immutable association rejection: ${JSON.stringify(await diagnosePreview())}`, { cause: failure })
+  })
   if (catalogAfterRejection !== 200) throw new Error(`Catalog did not recover after immutable association rejection: ${catalogAfterRejection}`)
   stage('checking published Artifact Explorer and declaration edit')
   // The Portal is an SPA: a document load is sufficient before checking its
   // actual API-backed screen. Waiting for every image to load can stall the
   // navigation without telling us whether the Explorer itself works.
-  await page.goto(`${base}apps/${draftId}/releases/${releaseId}/artifacts/${treeAssociationId}`, { waitUntil: 'domcontentloaded' })
+  await page.goto(`${base}apps/${draftId}/releases/${releaseId}/artifacts/${treeAssociationId}`, { waitUntil: 'domcontentloaded' }).catch(async failure => {
+    throw new Error(`Explorer navigation stalled: ${JSON.stringify(await diagnosePreview())}`, { cause: failure })
+  })
   await page.getByRole('heading', { name: 'Artifact Explorer' }).waitFor().catch(async failure => {
     const details = await page.evaluate(async ({ appId, releaseId, associationId }) => {
       const endpoints = { ready: '/health/ready', app: `/apps/${appId}`, release: `/releases/${releaseId}`,
