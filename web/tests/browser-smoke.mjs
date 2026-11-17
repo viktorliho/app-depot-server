@@ -78,13 +78,15 @@ async function verifyRestoredSnapshot(preview, page, manifest, password, ids) {
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     let errors = ''
+    // API request logs can fill an unread child pipe and stall the Server.
+    restoredServer.stdout.resume()
     restoredServer.stderr.on('data', chunk => { errors = (errors + chunk.toString()).slice(-2000) })
     const rootUrl = `http://127.0.0.1:${port}`
     const deadline = Date.now() + 15000
     let ready = false
     while (Date.now() < deadline) {
       if (restoredServer.exitCode !== null) throw new Error(`Restored Server exited: ${errors}`)
-      try { if ((await fetch(`${rootUrl}/api/v1/health/ready`)).ok) { ready = true; break } } catch { /* startup */ }
+      try { if ((await fetch(`${rootUrl}/api/v1/health/ready`, { signal: AbortSignal.timeout(1500) })).ok) { ready = true; break } } catch { /* startup */ }
       await new Promise(resolve => setTimeout(resolve, 100))
     }
     if (!ready) throw new Error(`Restored Server not ready: ${errors}`)
@@ -163,7 +165,7 @@ async function startLanPreview() {
     const deadline = Date.now() + 15000
     while (Date.now() < deadline) {
       try {
-        const response = await fetch(`http://127.0.0.1:${port}/api/v1/health/ready`)
+        const response = await fetch(`http://127.0.0.1:${port}/api/v1/health/ready`, { signal: AbortSignal.timeout(1500) })
         if (response.ok) return { namespace, importSource, importRoots, server, token, base: `http://app-depot.test:${port}/`, binary, port, repository, serverErrors: () => errors }
       } catch { /* Startup is still in progress. */ }
       await new Promise(resolve => setTimeout(resolve, 100))
@@ -182,16 +184,20 @@ async function restartLanPreview(preview) {
   preview.server = spawn(preview.binary, ['serve', '--namespace', preview.namespace, '--instance', 'preview', '--mode', 'preview',
     '--bind', `127.0.0.1:${preview.port}`, '--assets', join(preview.repository, 'web/dist')], { stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, APP_DEPOT_IMPORT_ROOTS: preview.importRoots, APP_DEPOT_SMOKE_TRACE: '1' } })
+  let errors = ''
+  preview.server.stdout.resume()
+  preview.server.stderr.on('data', chunk => { errors = (errors + chunk.toString()).slice(-8000) })
+  preview.serverErrors = () => errors
   const deadline = Date.now() + 15000
   while (Date.now() < deadline) {
-    if (preview.server.exitCode !== null) throw new Error(`Preview restart exited ${preview.server.exitCode}`)
+    if (preview.server.exitCode !== null) throw new Error(`Preview restart exited ${preview.server.exitCode}: ${errors}`)
     try {
-      const response = await fetch(`http://127.0.0.1:${preview.port}/api/v1/health/ready`)
+      const response = await fetch(`http://127.0.0.1:${preview.port}/api/v1/health/ready`, { signal: AbortSignal.timeout(1500) })
       if (response.ok) return
     } catch { /* Restart is still in progress. */ }
     await new Promise(resolve => setTimeout(resolve, 100))
   }
-  throw new Error('Preview restart readiness timeout')
+  throw new Error(`Preview restart readiness timeout: ${errors}`)
 }
 
 const selfHosted = process.env.APP_DEPOT_SELF_HOSTED === '1'
