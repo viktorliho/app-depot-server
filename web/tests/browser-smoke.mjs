@@ -798,7 +798,10 @@ try {
   }, draftId)
   if (catalogAfterRejection !== 200) throw new Error(`Catalog did not recover after immutable association rejection: ${catalogAfterRejection}`)
   stage('checking published Artifact Explorer and declaration edit')
-  await page.goto(`${base}apps/${draftId}/releases/${releaseId}/artifacts/${treeAssociationId}`)
+  // The Portal is an SPA: a document load is sufficient before checking its
+  // actual API-backed screen. Waiting for every image to load can stall the
+  // navigation without telling us whether the Explorer itself works.
+  await page.goto(`${base}apps/${draftId}/releases/${releaseId}/artifacts/${treeAssociationId}`, { waitUntil: 'domcontentloaded' })
   await page.getByRole('heading', { name: 'Artifact Explorer' }).waitFor().catch(async failure => {
     const details = await page.evaluate(async ({ appId, releaseId, associationId }) => {
       const endpoints = { ready: '/health/ready', app: `/apps/${appId}`, release: `/releases/${releaseId}`,
