@@ -908,9 +908,20 @@ impl<P: UploadPort> UploadCoordinator<P> {
 
     pub async fn maintenance(&self, cutoff: i64) -> Result<(), UploadError> {
         let _guard = self.serial.write().await;
+        #[cfg(debug_assertions)]
+        eprintln!("{{\"event\":\"preview_maintenance\",\"phase\":\"expire_idle\"}}");
         self.port.expire_idle(cutoff).await?;
+        #[cfg(debug_assertions)]
+        eprintln!("{{\"event\":\"preview_maintenance\",\"phase\":\"cleanup_pending\"}}");
         self.port.cleanup_pending().await?;
+        #[cfg(debug_assertions)]
+        eprintln!("{{\"event\":\"preview_maintenance\",\"phase\":\"gc_unreferenced\"}}");
         self.port.gc_unreferenced().await?;
-        self.port.cleanup_deletions().await
+        #[cfg(debug_assertions)]
+        eprintln!("{{\"event\":\"preview_maintenance\",\"phase\":\"cleanup_deletions\"}}");
+        let result = self.port.cleanup_deletions().await;
+        #[cfg(debug_assertions)]
+        eprintln!("{{\"event\":\"preview_maintenance\",\"phase\":\"done\"}}");
+        result
     }
 }
