@@ -785,8 +785,19 @@ try {
       'X-CSRF-Token': session.csrfToken, 'Idempotency-Key': key }, body: JSON.stringify({ artifactId }) })).status
   }, { releaseId, artifactId: originalArtifact, key: randomUUID() })
   if (immutable !== 409) throw new Error(`Published Release composition was mutable: ${immutable}`)
+  stage('checking published Artifact Explorer and declaration edit')
   await page.goto(`${base}apps/${draftId}/releases/${releaseId}/artifacts/${treeAssociationId}`)
-  await page.getByRole('heading', { name: 'Artifact Explorer' }).waitFor()
+  await page.getByRole('heading', { name: 'Artifact Explorer' }).waitFor().catch(async failure => {
+    const details = await page.evaluate(async ({ appId, releaseId, associationId }) => {
+      const statuses = {}
+      for (const [name, path] of Object.entries({ app: `/apps/${appId}`, release: `/releases/${releaseId}`,
+        association: `/associations/${associationId}`, declarations: `/associations/${associationId}/declarations` })) {
+        statuses[name] = (await fetch(`/api/v1${path}`)).status
+      }
+      return { route: location.pathname, screen: document.querySelector('main')?.innerText.slice(0, 800), statuses }
+    }, { appId: draftId, releaseId, associationId: treeAssociationId }).catch(error => ({ diagnosticError: String(error) }))
+    throw new Error(`Published Artifact Explorer did not open: ${JSON.stringify(details)}`, { cause: failure })
+  })
   await page.getByLabel('Label (optional)').fill('Published script')
   await page.getByRole('button', { name: 'Save entry points' }).click()
   await page.getByText('Entry points saved as a new declaration revision.').waitFor()
