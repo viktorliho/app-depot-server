@@ -1,7 +1,7 @@
 import { chromium } from 'playwright-core'
 import { createHash, randomUUID } from 'node:crypto'
 import { execFileSync, spawn } from 'node:child_process'
-import { mkdir, mkdtemp, open, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, open, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -226,6 +226,11 @@ try {
   await page.getByRole('button', { name: 'Sign in' }).click()
   await page.getByRole('heading', { name: 'Server overview' }).waitFor()
   await page.getByRole('heading', { name: 'No applications yet' }).first().waitFor()
+  if (preview) {
+    const build = await page.evaluate(async () => (await (await fetch('/api/v1/capabilities')).json()).build)
+    if (!build || build.version !== null || build.revision !== null) throw new Error(`Local build metadata was misleading: ${JSON.stringify(build)}`)
+    await page.getByText('App Depot Server: Development build').waitFor()
+  }
   let inboxPath
   if (preview) {
     await page.goto(`${base}admin/import-sources`)
@@ -261,6 +266,22 @@ try {
   await page.getByRole('heading', { name: 'Server overview' }).waitFor()
   if (await page.locator('html').getAttribute('data-theme') !== 'dark') throw new Error('Theme preference was not restored')
   await page.getByRole('button', { name: 'Switch to light theme' }).click()
+  if (preview) {
+    await page.goto(`${base}artifacts/new-app`)
+    await page.getByRole('heading', { name: 'Add Artifact' }).waitFor()
+    await page.getByLabel('Source').selectOption('server')
+    await page.getByLabel('Artifact type').selectOption('BareTree')
+    await page.getByLabel('Import root').selectOption('inbox')
+    await page.reload()
+    if (await page.getByLabel('Source').inputValue() !== 'server' || await page.getByLabel('Artifact type').inputValue() !== 'BareTree') {
+      throw new Error('Add Artifact source or type was lost on direct reload')
+    }
+    await page.goBack()
+    if (await page.getByLabel('Artifact type').inputValue() !== 'BareFile') throw new Error('Artifact type did not follow browser Back')
+    await page.goForward()
+    if (await page.getByLabel('Artifact type').inputValue() !== 'BareTree') throw new Error('Artifact type did not follow browser Forward')
+    await page.goto(`${base}apps`)
+  }
   await page.getByRole('navigation', { name: 'Server navigation' }).getByRole('link', { name: 'Applications' }).click()
   await page.getByRole('heading', { name: 'Applications', exact: true }).waitFor()
   await page.getByRole('heading', { name: 'No applications yet' }).waitFor()
@@ -268,6 +289,7 @@ try {
   await page.getByLabel('Application name').fill('Portal Draft')
   await page.getByRole('button', { name: 'Create Draft application' }).click()
   await page.getByRole('heading', { name: 'Portal Draft' }).waitFor()
+  if (preview) await page.getByText('App Depot Server: Development build').waitFor()
   const draftId = new URL(page.url()).pathname.split('/').pop()
   if (!/^[0-9a-f-]{36}$/.test(draftId)) throw new Error(`Unexpected application route ${page.url()}`)
   await page.getByText('Draft', { exact: true }).first().waitFor()
@@ -331,8 +353,8 @@ try {
   await page.getByRole('heading', { name: 'Portal Draft' }).waitFor()
   await page.reload()
   await page.getByRole('heading', { name: 'Portal Draft' }).waitFor()
-  await page.getByRole('link', { name: 'Add release from file' }).first().click()
-  await page.getByRole('heading', { name: 'Add release from file' }).waitFor()
+  await page.getByRole('link', { name: 'Add Artifact' }).first().click()
+  await page.getByRole('heading', { name: 'Add Artifact' }).waitFor()
   await page.getByLabel('File', { exact: true }).setInputFiles({ name: 'draft.txt', mimeType: 'text/plain', buffer: Buffer.from('Draft') })
   await page.getByRole('button', { name: 'Save Draft' }).click()
   await page.getByText('Saved Draft for Portal Draft').waitFor({ timeout: 30000 })
@@ -468,8 +490,8 @@ try {
       'X-CSRF-Token': session.csrfToken, 'If-Match': etag }, body: JSON.stringify({ version: 'stale' }) })).status
   }, { id: releaseId, etag: staleReleaseEtag })
   if (staleRelease !== 412) throw new Error(`Stale Release ETag was accepted: ${staleRelease}`)
-  await page.getByRole('link', { name: 'Upload Artifact' }).first().click()
-  await page.getByRole('heading', { name: 'Upload Artifact' }).waitFor()
+  await page.getByRole('link', { name: 'Add Artifact' }).first().click()
+  await page.getByRole('heading', { name: 'Add Artifact' }).waitFor()
   const fileBytes = Buffer.from('M9.2 file artifact content')
   await page.getByLabel('File', { exact: true }).setInputFiles({ name: 'content.txt', mimeType: 'text/plain', buffer: fileBytes })
   await page.getByRole('button', { name: 'Save Draft' }).click()
@@ -592,7 +614,7 @@ try {
   await writeFile(join(treeRoot, '.hidden-game'), 'valid hidden game data')
   await Promise.all(Array.from({ length: 51 }, (_, index) => writeFile(join(treeRoot, `zero-${String(index).padStart(2, '0')}.txt`), '')))
   await page.goto(`${base}apps/${draftId}/releases/${releaseId}/uploads/new`)
-  await page.getByLabel('Upload mode').selectOption('BareTree')
+  await page.getByLabel('Artifact type').selectOption('BareTree')
   await page.getByLabel('Directory files').setInputFiles(treeRoot)
   await page.getByText(/3 OS metadata files excluded/).waitFor()
   await page.getByLabel('Empty directory paths').fill('browser-tree/empty')
@@ -678,7 +700,7 @@ try {
   await writeFile(join(exactRoot, '.DS_Store'), 'exact metadata')
   await writeFile(join(exactRoot, '.hidden-game'), 'exact hidden content')
   await page.goto(`${base}apps/${draftId}/releases/${releaseId}/uploads/new`)
-  await page.getByLabel('Upload mode').selectOption('BareTree')
+  await page.getByLabel('Artifact type').selectOption('BareTree')
   await page.getByLabel('Directory files').setInputFiles(exactRoot)
   await page.getByText(/1 OS metadata files excluded/).waitFor()
   await page.getByLabel('Exclude common macOS and Windows metadata files').uncheck()
@@ -692,7 +714,7 @@ try {
   const zipPath = join(preview.namespace, 'bundle.zip')
   execFileSync('python3', ['-c', 'import sys,zipfile; z=zipfile.ZipFile(sys.argv[1],"w",zipfile.ZIP_DEFLATED); z.writestr("zip/nested.txt","zip content"); z.close()', zipPath])
   await page.goto(`${base}apps/${draftId}/releases/${releaseId}/uploads/new`)
-  await page.getByLabel('Upload mode').selectOption('ZipImport')
+  await page.getByLabel('Artifact type').selectOption('ZipImport')
   await page.getByLabel('File', { exact: true }).setInputFiles(zipPath)
   await page.getByRole('button', { name: 'Save Draft' }).click()
   await page.getByText('Saved Draft for Portal Draft Edited').waitFor({ timeout: 30000 })
@@ -862,7 +884,7 @@ try {
   await page.setViewportSize({ width: 1280, height: 900 })
 
   const name = `Browser smoke ${Date.now()}`
-  await page.getByRole('link', { name: 'Upload a new application' }).first().click()
+  await page.getByRole('link', { name: 'Add Artifact to a new App' }).first().click()
   await page.getByLabel('App name').fill(name)
   await page.getByLabel('File', { exact: true }).setInputFiles({ name: 'a.txt', mimeType: 'text/plain', buffer: Buffer.from('A') })
   keys.length = 0
@@ -1104,6 +1126,7 @@ try {
     await page.getByRole('button', { name: 'Previous page' }).click()
     await page.getByRole('heading', { name: 'Users & Access' }).waitFor()
     let serverFileIdentity
+    let serverTreeTarget
     for (const [rootId, sourceName, mode, appName] of [
       ['shared', 'server-file.txt', 'BareFile', 'Server imported file'],
       ['shared', 'server-tree', 'BareTree', 'Server imported tree'],
@@ -1112,13 +1135,13 @@ try {
       ['inbox', 'inbox-tree', 'BareTree', 'Inbox imported tree'],
       ['inbox', 'inbox.zip', 'ZipImport', 'Inbox imported ZIP']
     ]) {
-      await page.goto(`${base}import/new-app`)
-      await page.getByRole('heading', { name: 'Import from server storage' }).waitFor()
+      await page.goto(`${base}${rootId === 'inbox' ? 'artifacts/new-app?source=server' : 'import/new-app'}`)
+      await page.getByRole('heading', { name: 'Add Artifact' }).waitFor()
+      await page.getByLabel('Artifact type').selectOption(mode)
       await page.getByLabel('Import root').selectOption(rootId)
       await page.getByLabel('App name').fill(appName)
       await page.getByRole('button', { name: sourceName }).click()
       if (mode === 'BareTree') await page.getByRole('button', { name: 'Select this directory' }).click()
-      if (mode === 'ZipImport') await page.getByLabel('Import as').selectOption('ZipImport')
       const publishImport = rootId === 'inbox' && mode === 'ZipImport'
       await page.getByRole('button', { name: publishImport ? 'Import and publish' : 'Import and save Draft' }).click()
       try { await page.getByRole('heading', { name: 'Completed' }).waitFor({ timeout: 30000 }) }
@@ -1132,6 +1155,10 @@ try {
       const releaseLink = page.getByRole('link', { name: 'Open release' })
       await releaseLink.waitFor()
       const importedReleaseId = (await releaseLink.getAttribute('href')).split('/').pop()
+      if (rootId === 'shared' && mode === 'BareTree') {
+        const appLink = await page.getByRole('link', { name: 'Open application' }).getAttribute('href')
+        serverTreeTarget = { appId: appLink.split('/').pop(), releaseId: importedReleaseId }
+      }
       const imported = await page.evaluate(async ({ releaseId, mode }) => {
         const associationResponse = await fetch(`/api/v1/releases/${releaseId}/artifacts?pageSize=100`)
         if (!associationResponse.ok) throw new Error(`Imported associations unavailable: ${associationResponse.status}`)
@@ -1175,6 +1202,32 @@ try {
         }, imported.artifactId)
         if (!Buffer.from(afterRemoval).equals(expected)) throw new Error('CAS Artifact changed after Inbox source removal')
       }
+    }
+    await page.goto(`${base}apps/${serverTreeTarget.appId}/releases/${serverTreeTarget.releaseId}/artifacts/new?source=server&mode=BareTree`)
+    await page.getByRole('heading', { name: 'Add Artifact' }).waitFor()
+    await page.getByLabel('Import root').selectOption('inbox')
+    await page.getByRole('button', { name: 'inbox-tree' }).click()
+    await page.getByRole('button', { name: 'Select this directory' }).click()
+    await page.getByRole('button', { name: 'Import and save Draft' }).click()
+    await page.getByText('Artifact registration completed.').waitFor({ timeout: 30000 })
+    const associatedCount = await page.evaluate(async releaseId => (await (await fetch(`/api/v1/releases/${releaseId}/artifacts?pageSize=100`)).json()).items.length, serverTreeTarget.releaseId)
+    if (associatedCount !== 2) throw new Error(`Draft Release did not retain both Artifacts: ${associatedCount}`)
+    await page.goto(`${base}artifacts/new-app?source=server&mode=BareFile`)
+    await page.getByLabel('App name').fill('Opaque Inbox ZIP')
+    await page.getByRole('button', { name: 'inbox.zip' }).click()
+    await page.getByRole('button', { name: 'Import and save Draft' }).click()
+    const opaqueReleaseLink = page.getByRole('link', { name: 'Open release' })
+    await opaqueReleaseLink.waitFor()
+    const opaqueReleaseId = (await opaqueReleaseLink.getAttribute('href')).split('/').pop()
+    const opaqueZip = await page.evaluate(async releaseId => {
+      const associations = await (await fetch(`/api/v1/releases/${releaseId}/artifacts?pageSize=100`)).json()
+      const artifactId = associations.items[0].artifactId
+      const metadata = await (await fetch(`/api/v1/artifacts/${encodeURIComponent(artifactId)}`)).json()
+      const content = await (await fetch(`/api/v1/artifacts/${encodeURIComponent(artifactId)}/content`)).arrayBuffer()
+      return { kind: metadata.kind, bytes: Array.from(new Uint8Array(content)) }
+    }, opaqueReleaseId)
+    if (opaqueZip.kind !== 'File' || !Buffer.from(opaqueZip.bytes).equals(await readFile(join(inboxPath, 'inbox.zip')))) {
+      throw new Error('Opaque ZIP was extracted or its original bytes changed')
     }
     await page.goto(`${base}upload/new-app`)
     await page.getByLabel('App name').fill('HTTP identity comparison')
@@ -1313,6 +1366,17 @@ try {
     }, randomUUID())
     if (cancelled?.phase !== 'Failed' || cancelled.problem?.code !== 'session_cancelled') {
       throw new Error(`Cancelled Server import did not stop safely: ${JSON.stringify(cancelled)}`)
+    }
+    const inboxMode = (await stat(inboxPath)).mode & 0o777
+    const sharedMode = (await stat(preview.importSource)).mode & 0o777
+    try {
+      await chmod(inboxPath, 0)
+      await chmod(preview.importSource, 0)
+      await page.goto(`${base}artifacts/new-app?source=server`)
+      await page.getByText('No server import roots are available to your account.').waitFor()
+    } finally {
+      await chmod(inboxPath, inboxMode)
+      await chmod(preview.importSource, sharedMode)
     }
     await reader.goto(`${base}import/new-app`)
     await reader.getByText('You do not have permission to import to this target.').waitFor()

@@ -65,6 +65,7 @@ code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; overflow-
 .nav-link:hover { background: var(--surface-muted); color: var(--text); }
 .nav-link-active { color: var(--accent); background: var(--accent-soft); font-weight: 650; }
 .sidebar-bottom { margin-top: auto; border-top: 1px solid var(--border); padding: 16px 8px 0; font-size: .9rem; }
+.server-version { display: block; margin-top: 12px; color: var(--muted); overflow-wrap: anywhere; font-size: .75rem; }
 .main-column { min-width: 0; }
 .topbar { height: 60px; background: var(--surface); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; padding: 0 32px; gap: 16px; }
 .topbar-context { color: var(--muted); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }

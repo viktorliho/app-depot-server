@@ -2,15 +2,16 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { useOutletContext, useParams } from 'react-router'
 import { apiRequest, fileSha256, idempotencyKey, jsonBody, resource, type DepotApp, type FinalizationResult,
   SourceChangedError, type InventoryEntry, type Operation, type Page, type Release, type UploadProgress, type UploadSession } from './api'
-import { ActionLink, LoadingState, PageHeader, ProblemNotice } from './components'
+import { ActionLink, LoadingState, ProblemNotice } from './components'
 import { OperationNotice } from './management'
 import { useAuth } from './portal'
 import { useResource } from './use-resource'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
 import { isOsMetadataPath, pathOrder, selectTreeFiles } from './upload-selection'
+import type { IngestionMode, IngestionTarget } from './ingestion'
 
-type Mode = 'BareFile' | 'BareTree' | 'ZipImport'
+type Mode = IngestionMode
 type Capabilities = { ingestionModes: Mode[]; features: string[]; limits: { maxPageSize: number; maxUploadBytes: number } }
 type SelectedFile = { file: File; path: string; size: number; lastModified: number }
 type PreparedFile = SelectedFile & { hash: string }
@@ -127,14 +128,13 @@ async function inventoryFiles(sessionId: string, signal: AbortSignal, pageSize: 
   return map
 }
 
-export function UploadPage({ target }: { target: 'new-app' | 'app' | 'release' }) {
+export function UploadPage({ target, mode, onBusyChange }: { target: IngestionTarget; mode: Mode; onBusyChange: (busy: boolean) => void }) {
   const app = useOutletContext<DepotApp | undefined>()
   const { releaseId } = useParams()
   const { state } = useAuth()
   const capabilities = useResource('upload-capabilities', signal => apiRequest<Capabilities>('/capabilities', { signal }).then(result => result.value))
   const release = useResource(`upload-release:${releaseId || ''}`, signal => target === 'release'
     ? resource<Release>(`/releases/${releaseId}`, signal).then(result => result.value) : Promise.resolve(undefined))
-  const [mode, setMode] = useState<Mode>('BareFile')
   const [name, setName] = useState('')
   const [single, setSingle] = useState<File | null>(null)
   const [directoryFiles, setDirectoryFiles] = useState<File[]>([])
@@ -150,6 +150,7 @@ export function UploadPage({ target }: { target: 'new-app' | 'app' | 'release' }
   const [selectionVersion, setSelectionVersion] = useState(0)
   const [clock, setClock] = useState(0)
   const controller = useRef<AbortController | null>(null)
+  useEffect(() => { onBusyChange(busy) }, [busy, onBusyChange])
   useEffect(() => { if (!busy) return; const timer = window.setInterval(() => setClock(performance.now()), 1000); return () => window.clearInterval(timer) }, [busy])
   useEffect(() => () => controller.current?.abort(), [])
   const keys = useRef<Keys | null>(null)
@@ -319,22 +320,20 @@ export function UploadPage({ target }: { target: 'new-app' | 'app' | 'release' }
       } else { setView(current => current && { ...current, phase: 'Failed' }); setError(failure) }
     } finally { setBusy(false); controller.current = null }
   }
-  const heading = target === 'release' ? 'Upload Artifact' : target === 'app' ? 'Add release from file' : 'Upload a new application'
-  const importRoute = target === 'release' ? `/apps/${app?.id}/releases/${releaseId}/imports/new` : target === 'app' ? `/apps/${app?.id}/imports/new` : '/import/new-app'
-  return <><PageHeader title={heading} description={target === 'release' ? `Register an Artifact in the selected Draft release of ${app?.name}.` : target === 'app' ? `Create a Draft release in ${app?.name} from an Artifact.` : 'Create an application and Draft release from an Artifact.'} />
-    <div className="form-actions section-action"><strong>Upload from this device</strong>{capabilities.value?.features.includes('serverImport') && <ActionLink to={importRoute} secondary>Import from server storage</ActionLink>}</div>
+  return <>
     {target === 'release' && release.loading ? <LoadingState /> : target === 'release' && release.error ? <ProblemNotice error={release.error} retry={release.retry} /> : target === 'release' && (release.value?.state !== 'Draft' || release.value.appId !== app?.id) ? <ProblemNotice error={new Error('The selected Draft release is unavailable in this application.')} /> : capabilities.loading ? <LoadingState label="Checking upload capabilities…" /> : capabilities.error ? <ProblemNotice error={capabilities.error} retry={capabilities.retry} /> :
       !canManage || (target === 'new-app' && !canCreate) ? <ProblemNotice error={new Error('You do not have permission to upload to this target.')} /> : <section className="panel form-panel">
-        <p>Choose one ingestion mode. Registration creates or updates a Draft release; publication is a separate explicit action.</p>
+        <h2>Content from this device</h2>
         <form className="form-stack" onSubmit={submit}>
           {target === 'new-app' && <label>App name<input value={name} disabled={busy} onChange={event => { setName(event.target.value); reset() }} required /></label>}
-          <label>Upload mode<select value={mode} disabled={busy} onChange={event => { setMode(event.target.value as Mode); reset() }}><option value="BareFile" disabled={!capabilities.value?.ingestionModes.includes('BareFile')}>Single file</option><option value="BareTree" disabled={!capabilities.value?.ingestionModes.includes('BareTree')}>Directory tree</option><option value="ZipImport" disabled={!capabilities.value?.ingestionModes.includes('ZipImport')}>ZIP import</option></select></label>
+          {!capabilities.value?.ingestionModes.includes(mode) && <ProblemNotice error={new Error('The Server does not support this Artifact type.')} />}
           {mode === 'BareTree' ? <><label>Directory files<input key={selectionVersion} type="file" multiple disabled={busy} {...{ webkitdirectory: '' }} onChange={event => { setDirectoryFiles(Array.from(event.target.files || [])); reset() }} /></label>
             <label className="checkbox-row"><input type="checkbox" checked={excludeOsMetadata} disabled={busy} onChange={event => { setExcludeOsMetadata(event.target.checked); reset() }} /> Exclude common macOS and Windows metadata files</label>
             <p className="subtle" role="status">{directoryFiles.length ? `${treeSelection.files.length.toLocaleString()} files selected for upload; ${treeSelection.excludedCount.toLocaleString()} OS metadata files excluded.` : 'Select a directory to review the file count before uploading.'} Uncheck for an exact upload. Only .DS_Store, AppleDouble files, .Spotlight-V100, .Trashes, .fseventsd, Thumbs.db, ehthumbs.db, and desktop.ini are excluded.</p>
             <label>Empty directory paths (optional, one relative path per line)<textarea rows={3} value={extraDirectories} disabled={busy} onChange={event => { setExtraDirectories(event.target.value); reset() }} /></label>
             <p className="subtle">Browsers may omit empty folders and do not expose executable flags. Add empty paths above; uploaded files are marked non-executable. A tree needs at least one regular file.</p></> :
-            <label>File<input key={selectionVersion} type="file" disabled={busy} accept={mode === 'ZipImport' ? '.zip,application/zip' : undefined} onChange={event => { setSingle(event.target.files?.[0] || null); reset() }} required /></label>}
+            <><label>File<input key={selectionVersion} type="file" disabled={busy} accept={mode === 'ZipImport' ? '.zip,application/zip' : undefined} onChange={event => { setSingle(event.target.files?.[0] || null); reset() }} required /></label>
+              {single && <p role="status">Selected file: {single.name} · {formattedBytes(single.size)}</p>}</>}
           <div className="form-actions"><button className="button button-secondary" value="draft" disabled={busy || !!result || !validInput || (target === 'new-app' && !name.trim())}>Save Draft</button>
             {canPublish && <button className="button button-primary" value="publish" disabled={busy || !!result || !validInput || (target === 'new-app' && !name.trim())}>Upload and publish</button>}
             {busy && <button type="button" className="button button-danger" onClick={() => void cancel()}>Cancel upload</button>}

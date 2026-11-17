@@ -360,8 +360,28 @@ async fn capabilities(State(state): State<DownloadState>) -> Json<serde_json::Va
         vec![]
     };
     Json(
-        json!({"apiVersion":"1.0.0","ingestionModes":["BareFile","BareTree","ZipImport"],"zipMethods":["Store","Deflate"],"treeIdentity":"adtree:v1:sha256","fileIdentity":"adfile:sha256","uploadRanges":true,"downloadRanges":true,
+        json!({"apiVersion":"1.0.0","build":embedded_build_info(),"ingestionModes":["BareFile","BareTree","ZipImport"],"zipMethods":["Store","Deflate"],"treeIdentity":"adtree:v1:sha256","fileIdentity":"adfile:sha256","uploadRanges":true,"downloadRanges":true,
         "limits":{"maxPageSize":1000,"maxConcurrentRanges":8,"maxUploadBytes":1125899906842624u64},"features":features}),
+    )
+}
+
+fn build_info(version: Option<&str>, revision: Option<&str>) -> serde_json::Value {
+    let valid_version = version.filter(|value| {
+        value.starts_with('v')
+            && value[1..].split('.').count() == 3
+            && value[1..]
+                .split('.')
+                .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+    });
+    let valid_revision = revision
+        .filter(|value| value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    json!({"version":valid_version,"revision":valid_revision})
+}
+
+fn embedded_build_info() -> serde_json::Value {
+    build_info(
+        option_env!("APP_DEPOT_BUILD_VERSION"),
+        option_env!("APP_DEPOT_BUILD_REVISION"),
     )
 }
 
@@ -373,4 +393,32 @@ pub fn router(state: DownloadState) -> Router {
         .route("/artifacts/{artifact_id}/inventory", get(inventory))
         .route("/artifacts/{artifact_id}/files/{file_id}", get(tree_file))
         .with_state(state)
+}
+
+#[cfg(test)]
+mod build_info_tests {
+    use super::{build_info, embedded_build_info};
+
+    #[test]
+    fn release_metadata_and_development_fallback() {
+        let release = build_info(
+            Some("v0.4.2"),
+            Some("08c749b1124624d33af38a99e03d24ad45ee8564"),
+        );
+        assert_eq!(release["version"], "v0.4.2");
+        assert_eq!(
+            release["revision"],
+            "08c749b1124624d33af38a99e03d24ad45ee8564"
+        );
+        assert!(build_info(None, None)["version"].is_null());
+        assert!(build_info(Some("latest"), Some("not-a-revision"))["revision"].is_null());
+        assert!(build_info(Some("latest"), None)["version"].is_null());
+        assert_eq!(
+            embedded_build_info(),
+            build_info(
+                option_env!("APP_DEPOT_BUILD_VERSION"),
+                option_env!("APP_DEPOT_BUILD_REVISION")
+            )
+        );
+    }
 }

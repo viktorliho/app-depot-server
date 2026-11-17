@@ -73,6 +73,8 @@ jobs:
         run: |
           REVISION="$(git rev-parse HEAD)"
           docker buildx build --platform linux/amd64 --pull --push \
+            --build-arg "APP_DEPOT_BUILD_VERSION=$RELEASE_TAG" \
+            --build-arg "APP_DEPOT_BUILD_REVISION=$REVISION" \
             --tag "ghcr.io/viktorliho/app-depot-server:$RELEASE_TAG" \
             --label "org.opencontainers.image.version=$RELEASE_TAG" \
             --label "org.opencontainers.image.revision=$REVISION" \

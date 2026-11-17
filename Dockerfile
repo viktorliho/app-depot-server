@@ -9,9 +9,11 @@ RUN npm run build
 
 FROM --platform=linux/amd64 rust:1.88-bookworm AS server-build
 WORKDIR /src
+ARG APP_DEPOT_BUILD_VERSION
+ARG APP_DEPOT_BUILD_REVISION
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates/ ./crates/
-RUN cargo build --release --locked -p app-depot-server
+RUN APP_DEPOT_BUILD_VERSION="$APP_DEPOT_BUILD_VERSION" APP_DEPOT_BUILD_REVISION="$APP_DEPOT_BUILD_REVISION" cargo build --release --locked -p app-depot-server
 
 FROM --platform=linux/amd64 debian:bookworm-slim
 RUN apt-get update \

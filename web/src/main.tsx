@@ -5,8 +5,7 @@ import { AuthPage, AuthProvider, AppWorkspace, NotFound, RequireAdmin, RequireAu
 import { ApplicationOverview, ApplicationReleases, ApplicationsPage, CreateApplicationPage, ServerOverview,
   UnavailablePage } from './pages'
 import { AppDeclarations, AppSettings, ChannelsPage, NewRelease, OperationPage, ReleaseDetail } from './management'
-import { UploadPage } from './uploads'
-import { ServerImportPage } from './server-import'
+import { ArtifactIngestionPage } from './ingestion'
 import { UsersPage, DiagnosticsPage, ServerSettingsPage, ImportSourcesPage } from './admin'
 import { BackupsPage } from './backups'
 import { AccountPage } from './account'
@@ -21,8 +20,9 @@ createRoot(document.getElementById('root')!).render(<React.StrictMode><BrowserRo
     <Route index element={<ServerOverview />} />
     <Route path="/apps" element={<ApplicationsPage />} />
     <Route path="/apps/new" element={<CreateApplicationPage />} />
-    <Route path="/upload/new-app" element={<UploadPage target="new-app" />} />
-    <Route path="/import/new-app" element={<ServerImportPage target="new-app" />} />
+    <Route path="/artifacts/new-app" element={<ArtifactIngestionPage target="new-app" />} />
+    <Route path="/upload/new-app" element={<ArtifactIngestionPage target="new-app" initialSource="device" />} />
+    <Route path="/import/new-app" element={<ArtifactIngestionPage target="new-app" initialSource="server" />} />
     <Route path="/account" element={<AccountPage />} />
     <Route path="/operations/:id" element={<OperationPage />} />
     <Route element={<RequireAdmin />}>
@@ -39,10 +39,12 @@ createRoot(document.getElementById('root')!).render(<React.StrictMode><BrowserRo
     <Route path="releases/new" element={<NewRelease />} />
     <Route path="releases/:releaseId" element={<ReleaseDetail />} />
     <Route path="releases/:releaseId/artifacts/:associationId" element={<ArtifactExplorer />} />
-    <Route path="releases/:releaseId/uploads/new" element={<UploadPage target="release" />} />
-    <Route path="releases/:releaseId/imports/new" element={<ServerImportPage target="release" />} />
-    <Route path="uploads/new" element={<UploadPage target="app" />} />
-    <Route path="imports/new" element={<ServerImportPage target="app" />} />
+    <Route path="releases/:releaseId/artifacts/new" element={<ArtifactIngestionPage target="release" />} />
+    <Route path="releases/:releaseId/uploads/new" element={<ArtifactIngestionPage target="release" initialSource="device" />} />
+    <Route path="releases/:releaseId/imports/new" element={<ArtifactIngestionPage target="release" initialSource="server" />} />
+    <Route path="artifacts/new" element={<ArtifactIngestionPage target="app" />} />
+    <Route path="uploads/new" element={<ArtifactIngestionPage target="app" initialSource="device" />} />
+    <Route path="imports/new" element={<ArtifactIngestionPage target="app" initialSource="server" />} />
     <Route path="channels" element={<ChannelsPage />} />
     <Route path="artwork" element={<ArtworkPage />} />
     <Route path="declarations" element={<AppDeclarations />} />

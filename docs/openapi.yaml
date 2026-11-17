@@ -6268,6 +6268,8 @@ components:
       properties:
         apiVersion:
           type: string
+        build:
+          $ref: '#/components/schemas/BuildInfo'
         ingestionModes:
           type: array
           items:
@@ -6299,6 +6301,7 @@ components:
             type: string
       required:
       - apiVersion
+      - build
       - ingestionModes
       - zipMethods
       - treeIdentity
@@ -6307,6 +6310,18 @@ components:
       - downloadRanges
       - limits
       - features
+      additionalProperties: false
+    BuildInfo:
+      type: object
+      description: Embedded Server build metadata. Null values denote a local or older build without validated release metadata.
+      properties:
+        version:
+          type: [string, 'null']
+          pattern: '^v[0-9]+\.[0-9]+\.[0-9]+$'
+        revision:
+          type: [string, 'null']
+          pattern: '^[0-9a-fA-F]{40}$'
+      required: [version, revision]
       additionalProperties: false
     Limits:
       type: object

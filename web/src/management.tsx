@@ -272,14 +272,14 @@ export function ReleaseDetail() {
   if (current.loading) return <LoadingState label="Loading release…" />
   if (current.error) return <><PageHeader title="Release unavailable" /><ProblemNotice error={current.error} retry={current.retry} /></>
   if (release!.appId !== app.id) return <ProblemNotice error={new Error('This release does not belong to the selected application.')} />
-  return <><PageHeader title={release!.version || 'Unversioned release'} description="Release details" actions={mutable ? <ActionLink to={`/apps/${app.id}/releases/${releaseId}/uploads/new`}>Upload Artifact</ActionLink> : undefined} />
+  return <><PageHeader title={release!.version || 'Unversioned release'} description="Release details" actions={mutable ? <ActionLink to={`/apps/${app.id}/releases/${releaseId}/artifacts/new`}>Add Artifact</ActionLink> : undefined} />
     <section className="panel"><div className="identity-line"><StatusBadge value={release!.state} /><StatusBadge value={app.visibility} /></div>
       <p>Publication fixes the Artifact composition. Application visibility controls whether Published content is public.</p>
       <TechnicalDetails><code>Release ID: {releaseId}</code></TechnicalDetails></section>
     {error !== undefined && <ProblemNotice error={error} />}{notice && <Notice text={notice} />}{operation && <OperationNotice id={operation} />}
     {mutable && <section className="panel form-panel"><h2>Draft release</h2><form className="form-stack" onSubmit={updateVersion}>
       <label>Version (optional)<input value={version} onChange={event => setVersion(event.target.value)} /></label><button className="button button-secondary" disabled={busy}>Save version</button></form>
-      <div className="form-actions section-action"><ActionLink to={`/apps/${app.id}/releases/${releaseId}/uploads/new`} secondary>Upload Artifact</ActionLink>
+      <div className="form-actions section-action"><ActionLink to={`/apps/${app.id}/releases/${releaseId}/artifacts/new`} secondary>Add Artifact</ActionLink>
         {canPublish && <button className="button button-primary" onClick={() => void publish()} disabled={busy}>Publish release</button>}</div>
       {!canPublish && <p className="subtle">Current Publish permission is required to publish.</p>}</section>}
     <DeclarationEditor title="Release declarations" scope="release" path={`/releases/${releaseId}/declarations`} editable={allowed} />

@@ -18,7 +18,7 @@ export function ImportSourcesPage() {
         {sources.value!.items.map(source => <tr key={source.id}><td><strong>{source.displayName}</strong><small>{source.kind === 'Inbox' ? 'Built-in, Server Admin only' : 'Operator-configured root'}</small></td>
           <td><StatusBadge value={source.available ? 'Available' : 'Unavailable'} /></td><td>{source.importReadOnly ? 'Read-only operations' : 'Unknown'}</td><td><code>{source.containerPath}</code></td></tr>)}
       </tbody></table></div><p className="subtle">Configured roots are read by App Depot; the Server does not verify the host mount mode. Mount external sources read-only and set `APP_DEPOT_IMPORT_ROOTS` in the container configuration. An unavailable Inbox requires a writable parent or a mounted directory at its container path. These settings cannot be changed from the Portal.</p>
-      {sources.value!.items.some(source => source.available) && <ActionLink to="/import/new-app" secondary>Import into a new application</ActionLink>}
+      {sources.value!.items.some(source => source.available) && <ActionLink to="/artifacts/new-app?source=server" secondary>Add Artifact from server storage</ActionLink>}
       </section>}
   </>
 }

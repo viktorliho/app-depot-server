@@ -154,6 +154,16 @@ export function AuthPage({ setup }: { setup: boolean }) {
     </form></div></div>
 }
 
+function ServerVersion() {
+  const metadata = useResource('server-build-metadata', signal => apiRequest<{ build?: { version: string | null; revision: string | null } }>('/capabilities', { signal }).then(result => result.value.build))
+  const version = metadata.value?.version
+  const revision = metadata.value?.revision
+  const label = metadata.loading || metadata.error || !metadata.value ? 'Server version unavailable' : version || 'Development build'
+  return <small className="server-version" title={revision ? `Git commit ${revision}` : undefined}>
+    App Depot Server: {label}{revision && <span> · {revision.slice(0, 8)}</span>}
+  </small>
+}
+
 export function AppShell({ app, children }: { app?: DepotApp; children: ReactNode }) {
   const { state, signedOut } = useAuth()
   const { pathname } = useLocation()
@@ -208,7 +218,7 @@ export function AppShell({ app, children }: { app?: DepotApp; children: ReactNod
         { to: '/admin/users', label: 'Users & Access' }, { to: '/admin/backups', label: 'Backups' },
         { to: '/admin/diagnostics', label: 'Diagnostics' }, { to: '/admin/import-sources', label: 'Import Sources' }, { to: '/admin/settings', label: 'Server Settings' }
       ].map(link => <NavLink key={link.to} to={link.to} className={({ isActive }) => `nav-link ${isActive ? 'nav-link-active' : ''}`}>{link.label}</NavLink>)}</nav>}
-      {!app && canCreate && <div className="sidebar-bottom"><Link to="/upload/new-app">Upload a new application</Link></div>}
+      <div className="sidebar-bottom">{!app && canCreate && <Link to="/artifacts/new-app">Add Artifact to a new App</Link>}<ServerVersion /></div>
     </aside>
     {menuOpen && <button className="nav-scrim" aria-label="Close navigation" onClick={() => { setMenuOpen(false); menuButton.current?.focus() }} />}
     <div className="main-column"><header className="topbar"><button ref={menuButton} className="menu-button" aria-label="Open navigation" aria-expanded={menuOpen} onClick={() => setMenuOpen(value => !value)}>☰</button>

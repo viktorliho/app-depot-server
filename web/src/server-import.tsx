@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { useOutletContext, useParams } from 'react-router'
 import { apiRequest, idempotencyKey, resource, type DepotApp, type FinalizationResult, type Release } from './api'
-import { ActionLink, LoadingState, PageHeader, ProblemNotice } from './components'
+import { ActionLink, LoadingState, ProblemNotice } from './components'
 import { useAuth } from './portal'
 import { useResource } from './use-resource'
+import type { IngestionMode, IngestionTarget } from './ingestion'
 
 type Root = { id: string; displayName: string; kind: 'Inbox' | 'Configured' }
 type Entry = { name: string; entryType: 'File' | 'Directory'; size: number | null }
@@ -25,7 +26,7 @@ function storedKey(fingerprint: string) {
   return key
 }
 
-export function ServerImportPage({ target }: { target: 'new-app' | 'app' | 'release' }) {
+export function ServerImportPage({ target, mode, onBusyChange }: { target: IngestionTarget; mode: IngestionMode; onBusyChange: (busy: boolean) => void }) {
   const app = useOutletContext<DepotApp | undefined>()
   const { releaseId } = useParams()
   const { state } = useAuth()
@@ -43,7 +44,6 @@ export function ServerImportPage({ target }: { target: 'new-app' | 'app' | 'rele
   const [loading, setLoading] = useState(false)
   const [browseError, setBrowseError] = useState<unknown>()
   const [selected, setSelected] = useState<{ path: string; type: Entry['entryType']; size: number | null } | null>(null)
-  const [interpretation, setInterpretation] = useState<'BareFile' | 'ZipImport'>('BareFile')
   const [name, setName] = useState('')
   const [progress, setProgress] = useState<Progress | null>(null)
   const [error, setError] = useState<unknown>()
@@ -56,8 +56,9 @@ export function ServerImportPage({ target }: { target: 'new-app' | 'app' | 'rele
   const controller = useRef<AbortController | null>(null)
   const keyRef = useRef<{ fingerprint: string; key: string } | null>(null)
   const availableRoots = roots.value?.items || []
+  useEffect(() => { onBusyChange(busy) }, [busy, onBusyChange])
   useEffect(() => {
-    if (availableRoots.length && !availableRoots.some(root => root.id === rootId)) setRootId(availableRoots[0].id)
+    if (availableRoots.length && !availableRoots.some(root => root.id === rootId)) setRootId(availableRoots.find(root => root.id === 'inbox')?.id || availableRoots[0].id)
   }, [availableRoots, rootId])
   useEffect(() => {
     if (!rootId) return
@@ -73,20 +74,17 @@ export function ServerImportPage({ target }: { target: 'new-app' | 'app' | 'rele
   useEffect(() => () => controller.current?.abort(), [])
   const targetValue = useMemo(() => target === 'release' ? { releaseId } : target === 'app'
     ? { appId: app?.id, createRelease: true } : { newAppName: name.trim() }, [target, releaseId, app?.id, name])
-  const uploadRoute = target === 'release' ? `/apps/${app?.id}/releases/${releaseId}/uploads/new`
-    : target === 'app' ? `/apps/${app?.id}/uploads/new` : '/upload/new-app'
   function navigateDirectory(next: string) { setPath(next); setCursor(''); setPreviousCursors([]); setSelected(null) }
   function choose(entry: Entry) {
     const chosen = path ? `${path}/${entry.name}` : entry.name
     if (entry.entryType === 'Directory') navigateDirectory(chosen)
-    else { setSelected({ path: chosen, type: 'File', size: entry.size }); setInterpretation('BareFile') }
+    else if (mode !== 'BareTree') setSelected({ path: chosen, type: 'File', size: entry.size })
   }
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!selected || !rootId || !user || !canManage) return
+    if (!selected || !rootId || !user || !canManage || (mode === 'BareTree') !== (selected.type === 'Directory')) return
     const publish = (event.nativeEvent as SubmitEvent).submitter instanceof HTMLButtonElement &&
       (event.nativeEvent as SubmitEvent).submitter?.getAttribute('value') === 'publish'
-    const mode = selected.type === 'Directory' ? 'BareTree' : interpretation
     const request = { rootId, path: selected.path, mode, target: targetValue }
     const fingerprint = JSON.stringify(request)
     const key = keyRef.current?.fingerprint === fingerprint ? keyRef.current.key : storedKey(fingerprint)
@@ -182,8 +180,7 @@ export function ServerImportPage({ target }: { target: 'new-app' | 'app' | 'rele
       controller.current?.abort()
     } catch (failure) { setError(failure) }
   }
-  return <><PageHeader title="Import from server storage" description="Select an approved read-only source. App Depot copies and verifies its bytes into managed storage." />
-    <div className="form-actions section-action"><ActionLink to={uploadRoute} secondary>Upload from this device</ActionLink></div>
+  return <>
     {!canManage ? <ProblemNotice error={new Error('You do not have permission to import to this target.')} />
       : target === 'release' && release.loading ? <LoadingState />
       : target === 'release' && release.error ? <ProblemNotice error={release.error} retry={release.retry} />
@@ -192,6 +189,7 @@ export function ServerImportPage({ target }: { target: 'new-app' | 'app' | 'rele
       : roots.error ? <ProblemNotice error={roots.error} retry={roots.retry} />
       : !availableRoots.length ? <section className="panel"><p>No server import roots are available to your account. Ask a Server Admin to configure and permit a read-only root.</p></section>
       : <section className="panel form-panel">
+        <h2>Content from server storage</h2><p>Select an approved read-only source. App Depot copies and verifies its bytes into managed storage.</p>
         <form className="form-stack" onSubmit={submit}>
           {target === 'new-app' && <label>App name<input value={name} disabled={busy} onChange={event => setName(event.target.value)} required /></label>}
           <label>Import root<select value={rootId} disabled={busy} onChange={event => { setRootId(event.target.value); navigateDirectory('') }}>
@@ -199,11 +197,11 @@ export function ServerImportPage({ target }: { target: 'new-app' | 'app' | 'rele
           <div className="form-actions">
             <button type="button" className="button button-secondary" disabled={busy || !path} onClick={() => navigateDirectory(path.split('/').slice(0, -1).join('/'))}>Up one directory</button>
             <span>Location: /{path || ''}</span>
-            <button type="button" className="button button-secondary" disabled={busy} onClick={() => setSelected({ path, type: 'Directory', size: null })}>Select this directory</button>
+            {mode === 'BareTree' && <button type="button" className="button button-secondary" disabled={busy} onClick={() => setSelected({ path, type: 'Directory', size: null })}>Select this directory</button>}
           </div>
           {loading ? <LoadingState label="Reading source directory…" /> : browseError ? <ProblemNotice error={browseError} /> :
             <table><thead><tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Size</th></tr></thead><tbody>
-              {page?.items.map(entry => <tr key={entry.name}><td><button type="button" className="link-button" disabled={busy} onClick={() => choose(entry)}>{entry.name}</button></td><td>{entry.entryType}</td><td>{bytes(entry.size)}</td></tr>)}
+              {page?.items.map(entry => <tr key={entry.name}><td><button type="button" className="link-button" disabled={busy || (mode === 'BareTree' && entry.entryType === 'File')} onClick={() => choose(entry)}>{entry.name}</button></td><td>{entry.entryType}</td><td>{bytes(entry.size)}</td></tr>)}
             </tbody></table>}
           {!loading && !page?.items.length && <p>This directory is empty.</p>}
           {(previousCursors.length > 0 || page?.nextCursor) && <div className="form-actions">
@@ -216,10 +214,6 @@ export function ServerImportPage({ target }: { target: 'new-app' | 'app' | 'rele
             }}>Next page</button>}
           </div>}
           {selected && <p role="status">Selected {selected.type.toLowerCase()}: {selected.path || '/'} · {bytes(selected.size)}</p>}
-          {selected?.type === 'File' && <label>Import as<select value={interpretation} disabled={busy} onChange={event => setInterpretation(event.target.value as 'BareFile' | 'ZipImport')}>
-            <option value="BareFile">Original file Artifact (ZIP remains an opaque file)</option>
-            <option value="ZipImport">ZIP contents as a Tree Artifact</option>
-          </select></label>}
           <p className="subtle">The Server never modifies the source. Importing ZIP contents is an explicit choice. Registration creates a Draft release; publication is separate.</p>
           {rootId === 'inbox' && <p className="subtle">App Depot Inbox is a persistent landing area outside managed CAS. Place files there using the host filesystem or an operator-configured share. The import browser is read-only.</p>}
           <div className="form-actions"><button className="button button-secondary" value="draft" disabled={busy || !!result || !selected || (target === 'new-app' && !name.trim())}>Import and save Draft</button>
