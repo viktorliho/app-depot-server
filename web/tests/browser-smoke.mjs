@@ -768,7 +768,11 @@ try {
   if (!addedAssociationId) throw new Error('New association was not visible')
   await page.locator(`a[href$="/artifacts/${addedAssociationId}"]`).locator('..').getByRole('button', { name: 'Remove association' }).click()
   await page.getByRole('dialog', { name: 'Remove association' }).getByRole('button', { name: 'Remove association' }).click()
-  await page.getByRole('heading', { name: 'Remove artifact association operation' }).waitFor()
+  const associationRemoval = page.getByRole('heading', { name: 'Remove artifact association operation' }).locator('..')
+  await associationRemoval.waitFor()
+  await associationRemoval.getByText('Completed', { exact: true }).waitFor({ timeout: 15000 }).catch(async failure => {
+    throw new Error(`Artifact association cleanup did not complete before publication: ${await associationRemoval.innerText()}`, { cause: failure })
+  })
   await page.getByRole('button', { name: 'Publish release' }).click()
   await page.getByText('Release published. Artifact composition is now immutable.').waitFor()
   stage('verifying publication, channels and App lifecycle')
