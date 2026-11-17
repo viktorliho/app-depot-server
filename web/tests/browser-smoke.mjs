@@ -31,6 +31,22 @@ async function associationWithRoot(page, releaseId, rootPath) {
   }, { releaseId, rootPath })
 }
 
+async function stopServer(child, label) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return
+  const waitForExit = timeoutMs => new Promise(resolve => {
+    const onExit = () => { clearTimeout(timer); resolve(true) }
+    const timer = setTimeout(() => { child.off('exit', onExit); resolve(false) }, timeoutMs)
+    child.once('exit', onExit)
+  })
+  const gracefulExit = waitForExit(10000)
+  child.kill('SIGTERM')
+  if (await gracefulExit) return
+  console.error(`Browser smoke: ${label} did not stop after SIGTERM; sending SIGKILL`)
+  const forcedExit = waitForExit(5000)
+  child.kill('SIGKILL')
+  if (!await forcedExit) throw new Error(`${label} did not exit after SIGKILL`)
+}
+
 async function verifyRestoredSnapshot(preview, page, manifest, password, ids) {
   const scratch = await mkdtemp(join(tmpdir(), 'app-depot-m10-restore-'))
   const backupDir = join(scratch, 'portable-backup')
@@ -98,10 +114,7 @@ async function verifyRestoredSnapshot(preview, page, manifest, password, ids) {
     const original = Buffer.from(await (await get(`/artifacts/${encodeURIComponent(ids.artifactId)}/files/${encodeURIComponent(file.fileId)}`)).arrayBuffer())
     if (createHash('sha256').update(original).digest('hex') !== file.sha256) throw new Error('Restored original Artifact bytes failed SHA-256')
   } finally {
-    if (restoredServer && restoredServer.exitCode === null) {
-      restoredServer.kill('SIGTERM')
-      await new Promise(resolve => restoredServer.once('exit', resolve))
-    }
+    await stopServer(restoredServer, 'restored Server')
     await rm(scratch, { recursive: true, force: true })
   }
 }
@@ -157,10 +170,7 @@ async function startLanPreview() {
     }
     throw new Error(`Preview readiness timeout: ${errors}`)
   } catch (error) {
-    if (server && server.exitCode === null) {
-      server.kill('SIGTERM')
-      await new Promise(resolve => server.once('exit', resolve))
-    }
+    await stopServer(server, 'Preview Server during startup')
     await rm(namespace, { recursive: true, force: true })
     await rm(importSource, { recursive: true, force: true })
     throw error
@@ -168,10 +178,7 @@ async function startLanPreview() {
 }
 
 async function restartLanPreview(preview) {
-  if (preview.server.exitCode === null && preview.server.signalCode === null) {
-    preview.server.kill('SIGTERM')
-    await new Promise(resolve => preview.server.once('exit', resolve))
-  }
+  await stopServer(preview.server, 'Preview Server before restart')
   preview.server = spawn(preview.binary, ['serve', '--namespace', preview.namespace, '--instance', 'preview', '--mode', 'preview',
     '--bind', `127.0.0.1:${preview.port}`, '--assets', join(preview.repository, 'web/dist')], { stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, APP_DEPOT_IMPORT_ROOTS: preview.importRoots } })
@@ -188,7 +195,23 @@ async function restartLanPreview(preview) {
 }
 
 const selfHosted = process.env.APP_DEPOT_SELF_HOSTED === '1'
+let smokeStage = 'starting Preview Server'
+let stageStarted = Date.now()
+function stage(name) {
+  smokeStage = name
+  stageStarted = Date.now()
+  console.log(`Browser smoke: ${name}`)
+}
+const heartbeat = setInterval(() => {
+  console.log(`Browser smoke: waiting in ${smokeStage} for ${Math.round((Date.now() - stageStarted) / 1000)}s`)
+}, 30000)
+heartbeat.unref()
+const deadline = setTimeout(() => {
+  console.error(`Browser smoke timed out in ${smokeStage} after ${Math.round((Date.now() - stageStarted) / 1000)}s; inspect the last stage and Server operation before retrying.`)
+  process.exit(1)
+}, 5 * 60 * 1000)
 const preview = selfHosted ? await startLanPreview() : null
+stage('opening browser and completing setup')
 const browserPath = process.env.APP_DEPOT_BROWSER_BINARY ||
   (process.platform === 'darwin' ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : '/usr/bin/google-chrome')
 const setupToken = preview?.token || process.env.APP_DEPOT_SETUP_TOKEN
@@ -226,6 +249,7 @@ try {
   await page.getByRole('button', { name: 'Sign in' }).click()
   await page.getByRole('heading', { name: 'Server overview' }).waitFor()
   await page.getByRole('heading', { name: 'No applications yet' }).first().waitFor()
+  stage('checking Inbox, session and navigation')
   if (preview) {
     const build = await page.evaluate(async () => (await (await fetch('/api/v1/capabilities')).json()).build)
     if (!build || build.version !== null || build.revision !== null) throw new Error(`Local build metadata was misleading: ${JSON.stringify(build)}`)
@@ -289,6 +313,7 @@ try {
   await page.getByLabel('Application name').fill('Portal Draft')
   await page.getByRole('button', { name: 'Create Draft application' }).click()
   await page.getByRole('heading', { name: 'Portal Draft' }).waitFor()
+  stage('managing App metadata, artwork and releases')
   if (preview) await page.getByText('App Depot Server: Development build').waitFor()
   const draftId = new URL(page.url()).pathname.split('/').pop()
   if (!/^[0-9a-f-]{36}$/.test(draftId)) throw new Error(`Unexpected application route ${page.url()}`)
@@ -503,6 +528,7 @@ try {
   const downloaded = await page.evaluate(async id => Array.from(new Uint8Array(await (await fetch(`/api/v1/artifacts/${encodeURIComponent(id)}/content`)).arrayBuffer())), fileArtifact)
   if (createHash('sha256').update(Buffer.from(downloaded)).digest('hex') !== fileArtifact.split(':').pop()) throw new Error('Downloaded File Artifact hash mismatch')
   await page.goto(`${base}apps/${draftId}/releases/${releaseId}/uploads/new`)
+  stage('testing interrupted browser upload and authoritative resume')
   const largeBytes = Buffer.alloc(4 * 1024 * 1024 + 8, 65)
   const sentRanges = []
   let injectedFailure = false
@@ -604,6 +630,7 @@ try {
     throw new Error(`Combined declaration snapshot is incomplete: ${JSON.stringify(snapshot)}`)
   }
   const treeRoot = join(preview.namespace, 'browser-tree')
+  stage('uploading tree and ZIP Artifacts and browsing contents')
   await mkdir(join(treeRoot, 'nested'), { recursive: true })
   await writeFile(join(treeRoot, 'nested', 'tree.txt'), 'tree content')
   await writeFile(join(treeRoot, 'nested', 'é漢字.txt'), 'utf8 content')
@@ -744,6 +771,7 @@ try {
   await page.getByRole('heading', { name: 'Remove artifact association operation' }).waitFor()
   await page.getByRole('button', { name: 'Publish release' }).click()
   await page.getByText('Release published. Artifact composition is now immutable.').waitFor()
+  stage('verifying publication, channels and App lifecycle')
   await page.getByRole('navigation', { name: 'Application navigation' }).getByRole('link', { name: 'Overview' }).click()
   await page.getByText('App publication: Published').waitFor()
   await page.getByText('Visibility: Public').waitFor()
@@ -884,6 +912,7 @@ try {
   await page.setViewportSize({ width: 1280, height: 900 })
 
   const name = `Browser smoke ${Date.now()}`
+  stage('testing new-App upload and publication')
   await page.getByRole('link', { name: 'Add Artifact to a new App' }).first().click()
   await page.getByLabel('App name').fill(name)
   await page.getByLabel('File', { exact: true }).setInputFiles({ name: 'a.txt', mimeType: 'text/plain', buffer: Buffer.from('A') })
@@ -899,6 +928,7 @@ try {
   if (keys.length !== 3 || keys.some(key => !uuidV4.test(key)) || new Set(keys).size !== 3) {
     throw new Error(`Upload, finalization, and publish keys are not distinct UUIDv4 values: ${JSON.stringify(keys)}`)
   }
+  stage('testing online backup and isolated offline restore')
   const backup = await page.evaluate(async key => {
     const session = await (await fetch('/api/v1/auth/sessions/current')).json()
     const response = await fetch('/api/v1/backups', {
@@ -926,6 +956,7 @@ try {
   }
   if (preview) {
     await verifyRestoredSnapshot(preview, page, manifest, password, integratedIds)
+    stage('testing deletion, administration and account access')
     const sourceState = await page.evaluate(async ({ appId, associationId }) => ({
       app: await (await fetch(`/api/v1/apps/${appId}/declarations`)).json(),
       association: await (await fetch(`/api/v1/associations/${associationId}/declarations`)).json(),
@@ -1127,6 +1158,7 @@ try {
     await page.getByRole('heading', { name: 'Users & Access' }).waitFor()
     let serverFileIdentity
     let serverTreeTarget
+    stage('importing File, Tree and ZIP Artifacts from configured roots and Inbox')
     for (const [rootId, sourceName, mode, appName] of [
       ['shared', 'server-file.txt', 'BareFile', 'Server imported file'],
       ['shared', 'server-tree', 'BareTree', 'Server imported tree'],
@@ -1135,6 +1167,7 @@ try {
       ['inbox', 'inbox-tree', 'BareTree', 'Inbox imported tree'],
       ['inbox', 'inbox.zip', 'ZipImport', 'Inbox imported ZIP']
     ]) {
+      stage(`importing ${mode} from ${rootId}: ${sourceName}`)
       await page.goto(`${base}${rootId === 'inbox' ? 'artifacts/new-app?source=server' : 'import/new-app'}`)
       await page.getByRole('heading', { name: 'Add Artifact' }).waitFor()
       await page.getByLabel('Artifact type').selectOption(mode)
@@ -1203,6 +1236,7 @@ try {
         if (!Buffer.from(afterRemoval).equals(expected)) throw new Error('CAS Artifact changed after Inbox source removal')
       }
     }
+    stage('adding a second Artifact to a Draft Release')
     await page.goto(`${base}apps/${serverTreeTarget.appId}/releases/${serverTreeTarget.releaseId}/artifacts/new?source=server&mode=BareTree`)
     await page.getByRole('heading', { name: 'Add Artifact' }).waitFor()
     await page.getByLabel('Import root').selectOption('inbox')
@@ -1212,6 +1246,7 @@ try {
     await page.getByText('Artifact registration completed.').waitFor({ timeout: 30000 })
     const associatedCount = await page.evaluate(async releaseId => (await (await fetch(`/api/v1/releases/${releaseId}/artifacts?pageSize=100`)).json()).items.length, serverTreeTarget.releaseId)
     if (associatedCount !== 2) throw new Error(`Draft Release did not retain both Artifacts: ${associatedCount}`)
+    stage('verifying opaque ZIP File Artifact')
     await page.goto(`${base}artifacts/new-app?source=server&mode=BareFile`)
     await page.getByLabel('App name').fill('Opaque Inbox ZIP')
     await page.getByRole('button', { name: 'inbox.zip' }).click()
@@ -1241,6 +1276,7 @@ try {
       return (await response.json()).items[0].artifactId
     }, httpReleaseId)
     if (httpIdentity !== serverFileIdentity) throw new Error('HTTP and Server import created different File Artifact identities for the same bytes')
+    stage('checking import authorization, traversal and CSRF boundaries')
     const importBoundary = await page.evaluate(async () => {
       const invalidPath = await fetch('/api/v1/server-imports/roots/shared/entries?path=..%2Foutside')
       const symlinkEscape = await fetch('/api/v1/server-imports/roots/inbox/entries?path=escape-managed-parent')
@@ -1268,6 +1304,7 @@ try {
     if (readerRoots.list !== 200 || readerRoots.roots.length || readerRoots.page !== 404 || readerRoots.adminSources !== 403 || readerRoots.start !== 404) {
       throw new Error(`Server import root authorization failed: ${JSON.stringify(readerRoots)}`)
     }
+    stage('checking changed-source rejection during Server import')
     const changingPath = join(preview.importSource, 'changing.bin')
     const changingFile = await open(changingPath, 'w')
     await changingFile.truncate(64 * 1024 * 1024)
@@ -1308,6 +1345,7 @@ try {
     if (changedImport.phase !== 'Failed' || !['source_changed', 'hash_mismatch'].includes(changedImport.problem?.code)) {
       throw new Error(`Changed Server source was not rejected: ${JSON.stringify(changedImport)}`)
     }
+    stage('checking interrupted Server import and restart recovery')
     const restartFile = await open(join(preview.importSource, 'restart.bin'), 'w')
     await restartFile.truncate(128 * 1024 * 1024)
     await restartFile.close()
@@ -1352,6 +1390,7 @@ try {
     if (resumed.at(-1)?.result?.phase !== 'Completed' || resumed.at(-1)?.sessionId !== startedSession) {
       throw new Error(`Interrupted Server import did not resume its session: ${JSON.stringify(resumed.at(-1))}`)
     }
+    stage('checking active Server import cancellation')
     const cancelled = await page.evaluate(async key => {
       const session = await (await fetch('/api/v1/auth/sessions/current')).json()
       const started = await fetch('/api/v1/server-imports', { method: 'POST', headers: {
@@ -1367,6 +1406,7 @@ try {
     if (cancelled?.phase !== 'Failed' || cancelled.problem?.code !== 'session_cancelled') {
       throw new Error(`Cancelled Server import did not stop safely: ${JSON.stringify(cancelled)}`)
     }
+    stage('checking unavailable import roots and reader permissions')
     const inboxMode = (await stat(inboxPath)).mode & 0o777
     const sharedMode = (await stat(preview.importSource)).mode & 0o777
     try {
@@ -1385,6 +1425,7 @@ try {
   await reader.locator('.account-menu').getByRole('button', { name: 'Sign out' }).click()
   await reader.getByRole('heading', { name: 'Sign in' }).waitFor()
   await reader.close()
+  stage('signing out and cleaning up Preview resources')
   await page.evaluate(async () => {
     const session = await (await fetch('/api/v1/auth/sessions/current')).json()
     const response = await fetch('/api/v1/auth/sessions/current', { method: 'DELETE', headers: { 'X-CSRF-Token': session.csrfToken } })
@@ -1394,13 +1435,13 @@ try {
   await page.getByRole('heading', { name: 'Sign in' }).waitFor()
   console.log('Browser smoke passed: setup, auth, App/Release management, File/Tree/ZIP Explorer and entry points, metadata, artwork, declarations, channels, deletion, administration, account, operations, LAN HTTP, backup and isolated restore')
 } finally {
+  stage('closing browser and Preview Server')
   await browser?.close()
   if (preview) {
-    if (preview.server.exitCode === null) {
-      preview.server.kill('SIGTERM')
-      await new Promise(resolve => preview.server.once('exit', resolve))
-    }
+    await stopServer(preview.server, 'Preview Server during cleanup')
     await rm(preview.namespace, { recursive: true, force: true })
     await rm(preview.importSource, { recursive: true, force: true })
   }
+  clearInterval(heartbeat)
+  clearTimeout(deadline)
 }

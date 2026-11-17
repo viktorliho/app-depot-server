@@ -26,6 +26,7 @@ jobs:
       - run: npm --prefix web run test:unit
       - run: npm --prefix web run build
       - run: npm --prefix web run smoke:lan-http
+        timeout-minutes: 7
       - name: Validate OpenAPI
         run: |
           python3 -m venv "$RUNNER_TEMP/openapi"
