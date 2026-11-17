@@ -785,10 +785,18 @@ try {
   if (await page.getByRole('button', { name: 'Associate Artifact' }).count()) throw new Error('Published composition exposed association action')
   const immutable = await page.evaluate(async ({ releaseId, artifactId, key }) => {
     const session = await (await fetch('/api/v1/auth/sessions/current')).json()
-    return (await fetch(`/api/v1/releases/${releaseId}/artifacts`, { method: 'POST', headers: { 'Content-Type': 'application/json',
-      'X-CSRF-Token': session.csrfToken, 'Idempotency-Key': key }, body: JSON.stringify({ artifactId }) })).status
+    const response = await fetch(`/api/v1/releases/${releaseId}/artifacts`, { method: 'POST', headers: { 'Content-Type': 'application/json',
+      'X-CSRF-Token': session.csrfToken, 'Idempotency-Key': key }, body: JSON.stringify({ artifactId }) })
+    await response.arrayBuffer()
+    return response.status
   }, { releaseId, artifactId: originalArtifact, key: randomUUID() })
   if (immutable !== 409) throw new Error(`Published Release composition was mutable: ${immutable}`)
+  const catalogAfterRejection = await page.evaluate(async id => {
+    const response = await fetch(`/api/v1/apps/${id}`, { signal: AbortSignal.timeout(5000) })
+    await response.arrayBuffer()
+    return response.status
+  }, draftId)
+  if (catalogAfterRejection !== 200) throw new Error(`Catalog did not recover after immutable association rejection: ${catalogAfterRejection}`)
   stage('checking published Artifact Explorer and declaration edit')
   await page.goto(`${base}apps/${draftId}/releases/${releaseId}/artifacts/${treeAssociationId}`)
   await page.getByRole('heading', { name: 'Artifact Explorer' }).waitFor().catch(async failure => {
