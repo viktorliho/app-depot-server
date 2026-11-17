@@ -845,10 +845,7 @@ try {
       })))
       return { route: location.pathname, screen: document.querySelector('main')?.innerText.slice(0, 800), statuses }
     }, { appId: draftId, releaseId, associationId: treeAssociationId }).catch(error => ({ diagnosticError: String(error) }))
-    const ready = preview ? await fetch(`http://127.0.0.1:${preview.port}/api/v1/health/ready`, { signal: AbortSignal.timeout(3000) })
-      .then(response => response.status).catch(error => error instanceof Error ? error.name : String(error))
-      : 'external Server'
-    throw new Error(`Published Artifact Explorer did not open: ${JSON.stringify({ ...details, nodeReady: ready, serverExit: preview?.server.exitCode, serverSignal: preview?.server.signalCode })}`, { cause: failure })
+    throw new Error(`Published Artifact Explorer did not open: ${JSON.stringify({ ...details, preview: await diagnosePreview() })}`, { cause: failure })
   })
   await page.getByLabel('Label (optional)').fill('Published script')
   await page.getByRole('button', { name: 'Save entry points' }).click()
