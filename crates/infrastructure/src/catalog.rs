@@ -544,6 +544,9 @@ pub async fn create_association(
         return Err(CatalogError::NotFound);
     }
     if row.try_get::<String, _>("state")? != "Draft" {
+        // This pool has one connection. Complete the rollback before returning a
+        // rejection so subsequent catalog reads cannot wait behind its transaction.
+        tx.rollback().await?;
         return Err(CatalogError::ImmutableRelease);
     }
     let accessible: i64 = sqlx::query_scalar("SELECT count(*) FROM associations x JOIN releases r ON r.id=x.release_id JOIN apps a ON a.id=r.app_id WHERE x.artifact_id=? AND (a.owner_id=? OR ?=1)")
@@ -1183,12 +1186,15 @@ mod tests {
             .await,
             Err(CatalogError::ImmutableRelease)
         ));
-        let published_association: String =
+        let published_association: String = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
             sqlx::query_scalar("SELECT id FROM associations WHERE release_id=?")
                 .bind(&release.id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+                .fetch_one(&pool),
+        )
+        .await
+        .expect("catalog must remain responsive after immutable association rejection")
+        .unwrap();
         assert!(matches!(
             delete_association(
                 &pool,
