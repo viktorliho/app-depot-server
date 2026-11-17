@@ -251,10 +251,11 @@ async function diagnosePreview(page, appId) {
     failedRequests: failedRequests.slice(-10) }
 }
 let browser
+let page
 try {
   browser = await chromium.launch({ executablePath: browserPath, headless: true,
     args: insecureOrigin ? ['--host-resolver-rules=MAP app-depot.test 127.0.0.1', '--no-proxy-server'] : [] })
-  const page = await browser.newPage()
+  page = await browser.newPage()
   page.on('request', request => pendingRequests.set(request, request))
   page.on('requestfinished', request => pendingRequests.delete(request))
   page.on('requestfailed', request => {
@@ -1504,6 +1505,9 @@ try {
   await page.reload()
   await page.getByRole('heading', { name: 'Sign in' }).waitFor()
   console.log('Browser smoke passed: setup, auth, App/Release management, File/Tree/ZIP Explorer and entry points, metadata, artwork, declarations, channels, deletion, administration, account, operations, LAN HTTP, backup and isolated restore')
+} catch (failure) {
+  console.error(`Browser smoke failure context: ${JSON.stringify(await diagnosePreview(page))}`)
+  throw failure
 } finally {
   stage('closing browser and Preview Server')
   await browser?.close()
