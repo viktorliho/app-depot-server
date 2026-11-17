@@ -789,14 +789,18 @@ try {
   await page.goto(`${base}apps/${draftId}/releases/${releaseId}/artifacts/${treeAssociationId}`)
   await page.getByRole('heading', { name: 'Artifact Explorer' }).waitFor().catch(async failure => {
     const details = await page.evaluate(async ({ appId, releaseId, associationId }) => {
-      const statuses = {}
-      for (const [name, path] of Object.entries({ app: `/apps/${appId}`, release: `/releases/${releaseId}`,
-        association: `/associations/${associationId}`, declarations: `/associations/${associationId}/declarations` })) {
-        statuses[name] = (await fetch(`/api/v1${path}`)).status
-      }
+      const endpoints = { ready: '/health/ready', app: `/apps/${appId}`, release: `/releases/${releaseId}`,
+        association: `/associations/${associationId}`, declarations: `/associations/${associationId}/declarations` }
+      const statuses = Object.fromEntries(await Promise.all(Object.entries(endpoints).map(async ([name, path]) => {
+        try { return [name, (await fetch(`/api/v1${path}`, { signal: AbortSignal.timeout(3000) })).status] }
+        catch (error) { return [name, error instanceof Error ? error.name : String(error)] }
+      })))
       return { route: location.pathname, screen: document.querySelector('main')?.innerText.slice(0, 800), statuses }
     }, { appId: draftId, releaseId, associationId: treeAssociationId }).catch(error => ({ diagnosticError: String(error) }))
-    throw new Error(`Published Artifact Explorer did not open: ${JSON.stringify(details)}`, { cause: failure })
+    const ready = preview ? await fetch(`http://127.0.0.1:${preview.port}/api/v1/health/ready`, { signal: AbortSignal.timeout(3000) })
+      .then(response => response.status).catch(error => error instanceof Error ? error.name : String(error))
+      : 'external Server'
+    throw new Error(`Published Artifact Explorer did not open: ${JSON.stringify({ ...details, nodeReady: ready, serverExit: preview?.server.exitCode, serverSignal: preview?.server.signalCode })}`, { cause: failure })
   })
   await page.getByLabel('Label (optional)').fill('Published script')
   await page.getByRole('button', { name: 'Save entry points' }).click()
