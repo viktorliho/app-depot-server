@@ -232,7 +232,7 @@ async function diagnosePreview() {
   }
   let serverProcess
   if (preview?.server.pid) {
-    try { serverProcess = execFileSync('ps', ['-p', String(preview.server.pid), '-o', 'pid,stat,etime,%cpu,%mem,comm'], { encoding: 'utf8' }).trim() }
+    try { serverProcess = execFileSync('ps', ['-T', '-p', String(preview.server.pid), '-o', 'pid,tid,stat,wchan:24,%cpu,comm'], { encoding: 'utf8' }).trim() }
     catch (error) { serverProcess = error instanceof Error ? error.message : String(error) }
   }
   return { endpoints, serverExit: preview?.server.exitCode, serverSignal: preview?.server.signalCode,
