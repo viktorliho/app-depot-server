@@ -8,7 +8,8 @@ import { useResource } from './use-resource'
 const enc = encodeURIComponent
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
 type Entry = Record<string, unknown>
-type Assessment = { status: 'Absent' | 'Valid' | 'Issues' | 'Unsupported'; items: { index: number; id: string; status: string }[] }
+type Assessment = { status: 'Absent' | 'Valid' | 'Issues' | 'Unsupported'; launchStatus: string; selectionRequiredFor: string[];
+  items: { index: number; id: string; status: string; launchStatus: string; launchReason: string | null; effectivePlatforms: string[] }[] }
 
 function readEntries(data: unknown): Entry[] | null {
   if (!object(data)) return null
@@ -71,6 +72,9 @@ export function ArtifactExplorer() {
 
   function openDirectory(path: string | null) { setParams(path === null ? { dir: '' } : { dir: path }) }
   function changeEntry(index: number, patch: Entry) { setEntries(current => current.map((item, position) => position === index ? { ...item, ...patch } : item)) }
+  function changeLaunch(index: number, patch: Record<string, unknown>) {
+    setEntries(current => current.map((item, position) => position === index ? { ...item, launch: { ...(object(item.launch) ? item.launch : {}), ...patch } } : item))
+  }
   function applySelection() {
     const target = selected || (artifact.value?.kind === 'File' ? { type: 'ArtifactFile' as const } : null)
     if (!target) return
@@ -85,6 +89,11 @@ export function ArtifactExplorer() {
       const data = withEntries(declaration.value!.value.data, entries)
       const check = await apiRequest<Assessment>(`/associations/${enc(associationId!)}/entry-points/validate`, { method: 'POST', authenticated: true, ...jsonBody({ data }) })
       if (check.value.status !== 'Valid' && check.value.status !== 'Absent') throw new Error(`Entry points need correction: ${check.value.items.filter(item => item.status !== 'Valid').map(item => `#${item.index + 1} ${item.status}`).join(', ') || check.value.status}.`)
+      const invalidLaunches = check.value.items.filter(item => {
+        const launch = entries[item.index]?.launch
+        return object(launch) && launch.method === 'NativePortableV1' && item.launchStatus !== 'Valid'
+      })
+      if (invalidLaunches.length) throw new Error(`Portable launch needs correction: ${invalidLaunches.map(item => `#${item.index + 1} ${item.launchReason || item.launchStatus}`).join(', ')}.`)
       await apiRequest(`/associations/${enc(associationId!)}/declarations`, { method: 'PUT', authenticated: true, csrf: state.session!.csrfToken,
         ifMatch: declaration.value!.etag, ...jsonBody({ data }) })
       setNotice('Entry points saved as a new declaration revision.'); setRevision(value => value + 1)
@@ -119,18 +128,37 @@ export function ArtifactExplorer() {
       </>}
       <TechnicalDetails><p>Artifact ID: <code>{item.id}</code></p><p>Association ID: <code>{associationId}</code></p></TechnicalDetails>
     </section>
-    <section className="panel"><h2 id="entry-points-heading">Entry points</h2><p>Optional client hints. A valid path does not guarantee that a client can execute the file. Platform constraints narrow applicability; leave blank for any platform.</p>
+    <section className="panel"><h2 id="entry-points-heading">Entry points</h2><p>Optional file references. A valid target does not make a program launchable. Native portable launch is declared separately for a compatible platform and still requires a client's support and your decision to run it.</p>
       {validation.loading ? <LoadingState label="Checking saved references…" /> : validation.error ? <ProblemNotice error={validation.error} retry={validation.retry} /> : validation.value && <p role="status">Saved references: {validation.value.status}{validation.value.items.some(value => value.status !== 'Valid') && ` (${validation.value.items.filter(value => value.status !== 'Valid').map(value => `#${value.index + 1} ${value.status}`).join(', ')})`}</p>}
+      {validation.value && <p role="status">Portable launches: {validation.value.launchStatus}{validation.value.selectionRequiredFor.length > 0 && ` · explicit selection required for ${validation.value.selectionRequiredFor.join(', ')}`}</p>}
       {!structured && <p role="alert">This declaration does not use an editable entry-point structure. Its JSON is preserved. Use the raw declaration editor on the Release page.</p>}
         {selected && allowed && structured && <div className="form-actions"><p>Selected: <code>{selected.type === 'TreeFile' ? selected.path : 'This single-file Artifact'}</code></p><button className="button button-primary" onClick={applySelection}>{editingIndex === null ? 'Add entry point' : 'Use selected target'}</button><button className="button button-secondary" onClick={() => { setSelected(null); setEditingIndex(null) }}>Cancel selection</button></div>}
       {editingIndex !== null && !selected && <p role="status">Choose a file above to change entry point {editingIndex + 1}.</p>}
       {structured && !entries.length && <EmptyState title="No entry points" detail="Choose a file above, or leave this Artifact without entry points." />}
-      {structured && entries.map((entry, index) => <div className="form-panel" key={String(entry.id || index)}><h3>Entry point {index + 1}</h3><p>Target: <code>{targetLabel(entry)}</code></p>
+      {structured && entries.map((entry, index) => {
+        const launch = object(entry.launch) ? entry.launch : null
+        return <div className="form-panel" key={String(entry.id || index)}><h3>Entry point {index + 1}</h3><p>Target: <code>{targetLabel(entry)}</code></p>
         <label>Label (optional)<input value={typeof entry.label === 'string' ? entry.label : ''} readOnly={!allowed} onChange={event => changeEntry(index, { label: event.target.value || undefined })} /></label>
         <label>Target operating systems and CPU architectures (one per line; optional)<textarea rows={3} value={Array.isArray(entry.platforms) ? entry.platforms.join('\n') : ''} readOnly={!allowed} placeholder={'linux/x86_64\nwindows/x86_64'} onChange={event => changeEntry(index, { platforms: event.target.value.split('\n').map(s => s.trim()).filter(Boolean) })} /></label>
+        {entry.launch !== undefined && (!launch || launch.method !== 'NativePortableV1') ?
+          <p role="status">This entry has an unsupported launch declaration. It remains unchanged here; use Advanced JSON to inspect or replace it.</p> : <>
+          <label>Execution method<select value={entry.launch === undefined ? 'none' : 'native'} disabled={!allowed} onChange={event => changeEntry(index, { launch: event.target.value === 'native' ? launch && launch.method === 'NativePortableV1' ? launch : { method: 'NativePortableV1' } : undefined })}>
+            <option value="none">File reference only — no launch</option><option value="native">Native portable program (v1)</option></select></label>
+          {launch && launch.method === 'NativePortableV1' && <>
+            <p className="subtle">A compatible client can directly run this verified target on a listed platform. No installer, shell command or dependency setup is declared.</p>
+            <label>Working directory<select value={launch.workingDirectory === undefined ? 'target' : launch.workingDirectory === '' ? 'root' : 'custom'} disabled={!allowed} onChange={event => changeLaunch(index, { workingDirectory: event.target.value === 'target' ? undefined : event.target.value === 'root' ? '' : 'bin' })}>
+              <option value="target">Target file's directory (default)</option><option value="root">Artifact root</option>{item.kind === 'Tree' && <option value="custom">Specific Tree directory</option>}</select></label>
+            {typeof launch.workingDirectory === 'string' && launch.workingDirectory !== '' && <label>Tree directory path<input value={launch.workingDirectory} readOnly={!allowed} onChange={event => changeLaunch(index, { workingDirectory: event.target.value })} placeholder="System64" /></label>}
+            <fieldset><legend>Literal process arguments</legend><p className="subtle">Each field is one argument; an empty field is an empty argument. No shell or variable expansion.</p>
+              {Array.isArray(launch.arguments) && launch.arguments.map((argument, argIndex) => <div className="form-actions" key={argIndex}><label>Argument {argIndex + 1}<input value={typeof argument === 'string' ? argument : ''} readOnly={!allowed} onChange={event => changeLaunch(index, { arguments: (launch.arguments as unknown[]).map((value, position) => position === argIndex ? event.target.value : value) })} /></label>{allowed && <button className="button button-secondary" onClick={() => changeLaunch(index, { arguments: (launch.arguments as unknown[]).filter((_, position) => position !== argIndex) })}>Remove argument</button>}</div>)}
+              {allowed && <button className="button button-secondary" onClick={() => changeLaunch(index, { arguments: [...(Array.isArray(launch.arguments) ? launch.arguments : []), ''] })}>Add argument</button>}
+            </fieldset>
+            {validation.value?.items[index] && <p className="subtle">Saved launch: {validation.value.items[index].launchStatus}{validation.value.items[index].launchReason && ` (${validation.value.items[index].launchReason})`}</p>}
+          </>}
+        </>}
         <TechnicalDetails><code>Entry ID: {String(entry.id)}</code></TechnicalDetails>
         {allowed && <div className="form-actions"><button className="button button-secondary" onClick={() => { setEditingIndex(index); setSelected(null); document.querySelector('[aria-label="Artifact path"]')?.scrollIntoView({ block: 'start' }) }}>Change target using Explorer</button><button className="button button-danger" onClick={() => setEntries(current => current.filter((_, position) => position !== index))}>Remove entry point</button></div>}
-      </div>)}
+      </div>})}
       {error !== undefined && <ProblemNotice error={error} />}{notice && <p role="status" className="success-notice">{notice}</p>}
       {allowed && structured && <button className="button button-primary" disabled={busy} onClick={() => void save()}>{busy ? 'Saving…' : 'Save entry points'}</button>}
     </section>

@@ -1,5 +1,7 @@
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
+import { parseExactJson } from './declaration-json'
+export { parseExactJson } from './declaration-json'
 
 export type User = { id: string; username: string; serverAdmin: boolean; publishPermission: boolean }
 export type BrowserSession = { user: User; csrfToken: string }
@@ -93,7 +95,9 @@ export async function apiRequest<T>(path: string, options: Options = {}): Promis
     if (response.status === 403 && authenticated && /^\/(admin|users|settings|backups)(\/|$)/.test(path)) window.dispatchEvent(new Event('app-depot-permissions-changed'))
     throw new ApiError(response.status, body.code || 'request_failed', body.title || `Request failed (${response.status})`, body.detail)
   }
-  const value = response.status === 204 ? undefined as T : await response.json() as T
+  const declarationResponse = /\/declarations(?:\/|\?|$)|\/declaration-snapshot(?:\?|$)/.test(path)
+  const value = response.status === 204 ? undefined as T : declarationResponse
+    ? parseExactJson(await response.text()) as T : await response.json() as T
   return { value, response }
 }
 

@@ -3427,8 +3427,8 @@ paths:
       operationId: validateAssociationEntryPoints
       tags:
       - Declarations
-      summary: Assess optional entry-point references against an associated Artifact without changing declarations
-      description: The current declaration PUT remains lossless for arbitrary JSON. This read-only assessment does not create a revision or gate publication.
+      summary: Assess entry-point targets and optional portable launches without changing declarations
+      description: Target status retains its historical meaning. Separate launch status assesses the optional NativePortableV1 convention using the current Release platforms; it is not local execution readiness or authorization. Declaration PUT remains lossless for arbitrary JSON. This read-only operation creates no revision and does not gate publication.
       parameters:
       - name: association_id
         in: path
@@ -3445,23 +3445,36 @@ paths:
                 data: {}
       responses:
         '200':
-          description: Entry-point assessment; non-Valid statuses do not modify data.
+          description: Target and portable-launch assessment; non-Valid statuses do not modify data.
           content:
             application/json:
               schema:
                 type: object
-                required: [status, items]
+                required: [status, launchStatus, selectionRequiredFor, items]
                 properties:
                   status: { type: string, enum: [Absent, Valid, Issues, Unsupported] }
+                  launchStatus: { type: string, enum: [Absent, Valid, Issues, Unsupported] }
+                  selectionRequiredFor:
+                    type: array
+                    items: { $ref: '#/components/schemas/NativePlatform' }
+                    description: Known platforms on which multiple valid entry points in this association require explicit choice.
                   items:
                     type: array
                     items:
                       type: object
-                      required: [index, id, status]
+                      required: [index, id, status, launchStatus, launchReason, effectivePlatforms]
                       properties:
                         index: { type: integer, minimum: 0 }
                         id: { type: string }
                         status: { type: string, enum: [Valid, Missing, NotFile, Invalid, Unsupported] }
+                        launchStatus: { type: string, enum: [Absent, Valid, Invalid, Unsupported, TargetUnavailable] }
+                        launchReason:
+                          oneOf:
+                          - { type: string, enum: [MalformedLaunch, MalformedMethod, UnknownMethod, TargetNotValid, MissingOrMalformedPlatforms, MalformedReleasePlatforms, NoPlatformIntersection, UnknownPlatform, MalformedArguments, MalformedWorkingDirectory, WorkingDirectoryNotFound] }
+                          - { type: 'null' }
+                        effectivePlatforms:
+                          type: array
+                          items: { $ref: '#/components/schemas/NativePlatform' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '404': { $ref: '#/components/responses/NotFound' }
         default: { $ref: '#/components/responses/InvalidRequest' }
@@ -5222,7 +5235,25 @@ components:
       - number
       - boolean
       - 'null'
-      description: Any JSON value, including null; server-managed fields remain outside data. Object values may use the optional appDepot metadata convention described in architecture.md; the Server does not validate or interpret it.
+      description: Any JSON value, including null; server-managed fields remain outside data. Object values may use the optional appDepot convention described in architecture.md. NativePortableV1 is an optional entry-point launch method, not a constraint on arbitrary raw JSON storage or a Server execution capability.
+    NativePlatform:
+      type: string
+      enum: [linux/x86_64, linux/aarch64, windows/x86_64, windows/aarch64, macos/x86_64, macos/aarch64]
+      description: Exact host OS/architecture token for NativePortableV1. Unknown tokens remain storable but have no v1 match; aliases and case folding are not defined.
+    NativePortableLaunchV1:
+      type: object
+      description: Optional value of one Association data.appDepot.entryPoints[].launch. Its target is the enclosing entry point; it never supplies another path or changes Artifact identity. Additional properties are inert under v1.
+      required: [method]
+      properties:
+        method: { type: string, const: NativePortableV1 }
+        workingDirectory:
+          type: string
+          description: Exact Artifact-relative Tree directory path; empty string denotes Artifact root. Omission uses the target file's parent directory. Only empty or omitted is valid for File Artifacts.
+        arguments:
+          type: array
+          maxItems: 64
+          description: Literal UTF-8 argv values, no shell or substitutions. Each string is at most 4096 UTF-8 bytes; total at most 16384 bytes. Empty values are allowed, control characters are not.
+          items: { type: string }
     Artwork:
       type: object
       properties:

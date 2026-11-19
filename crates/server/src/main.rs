@@ -55,12 +55,12 @@ fn location(args: &[String]) -> (PathBuf, String) {
 }
 
 fn validate_production_args(args: &[String]) -> Result<(), &'static str> {
-    if args.len() < 3 || (args.len() - 1) % 2 != 0 {
+    if args.len() < 3 || !(args.len() - 1).is_multiple_of(2) {
         return Err("invalid Production arguments");
     }
     let mut mode = false;
     let mut config = false;
-    for pair in args[1..].chunks_exact(2) {
+    for pair in args[1..].as_chunks::<2>().0 {
         if pair[1].starts_with("--") {
             return Err("missing Production option value");
         }

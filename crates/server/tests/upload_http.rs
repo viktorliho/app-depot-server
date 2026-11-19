@@ -1772,6 +1772,67 @@ async fn acknowledged_range_survives_real_process_kill() {
         {"id":"secondary","target":{"type":"TreeFile","path":"a.txt"}}
     ]}});
     assert_eq!(assess(entry_data.clone())["status"], "Valid");
+    assert_eq!(assess(entry_data.clone())["launchStatus"], "Absent");
+    let native = json!({"appDepot":{"entryPoints":[
+        {"id":"client","target":{"type":"TreeFile","path":"a.txt"},"platforms":["linux/x86_64"],"launch":{"method":"NativePortableV1","workingDirectory":"","arguments":["--windowed",""]}},
+        {"id":"server","target":{"type":"TreeFile","path":"a.txt"},"platforms":["linux/x86_64"],"launch":{"method":"NativePortableV1"}}
+    ]}});
+    let assessed = assess(native);
+    assert_eq!(assessed["status"], "Valid");
+    assert_eq!(assessed["launchStatus"], "Valid");
+    assert_eq!(assessed["selectionRequiredFor"], json!(["linux/x86_64"]));
+    assert_eq!(
+        assessed["items"][0]["effectivePlatforms"],
+        json!(["linux/x86_64"])
+    );
+    let release_etag = format!("\"declarations-{release_id}-1\"");
+    let (status, _) = request(
+        addr,
+        "PUT",
+        &format!("/api/v1/releases/{release_id}/declarations"),
+        &token,
+        &[
+            ("Content-Type", "application/json"),
+            ("If-Match", &release_etag),
+        ],
+        json!({"data":{"appDepot":{"platforms":["linux/aarch64"]}}})
+            .to_string()
+            .as_bytes(),
+    )
+    .unwrap();
+    assert_eq!(status, 200);
+    assert_eq!(
+        assess(
+            json!({"appDepot":{"entryPoints":[{"id":"x64","target":{"type":"TreeFile","path":"a.txt"},"platforms":["linux/x86_64"],"launch":{"method":"NativePortableV1"}}]}})
+        )["items"][0]["launchReason"],
+        "NoPlatformIntersection"
+    );
+    let release_etag = format!("\"declarations-{release_id}-2\"");
+    let (status, _) = request(
+        addr,
+        "PUT",
+        &format!("/api/v1/releases/{release_id}/declarations"),
+        &token,
+        &[
+            ("Content-Type", "application/json"),
+            ("If-Match", &release_etag),
+        ],
+        json!({"data":{}}).to_string().as_bytes(),
+    )
+    .unwrap();
+    assert_eq!(status, 200);
+    assert_eq!(
+        assess(
+            json!({"appDepot":{"entryPoints":[{"id":"bad-dir","target":{"type":"TreeFile","path":"a.txt"},"platforms":["linux/x86_64"],"launch":{"method":"NativePortableV1","workingDirectory":"../outside"}}]}})
+        )["items"][0]["launchReason"],
+        "MalformedWorkingDirectory"
+    );
+    assert_eq!(
+        assess(
+            json!({"appDepot":{"entryPoints":[{"id":"future","target":{"type":"TreeFile","path":"a.txt"},"platforms":["linux/x86_64"],"launch":{"method":"NativePortableV2"}}]}})
+        )["items"][0]["launchStatus"],
+        "Unsupported"
+    );
     assert_eq!(
         assess(
             json!({"appDepot":{"entryPoints":[{"id":"bad","target":{"type":"TreeFile","path":"../etc/passwd"}}]}})
@@ -1834,7 +1895,7 @@ async fn acknowledged_range_survives_real_process_kill() {
     )
     .unwrap();
     assert_eq!(status, 412);
-    let unresolved = json!({"appDepot":{"entryPoints":[{"id":"future","target":{"type":"TreeFile","path":"missing.txt"},"extension":{"kept":true}}]},"other":"kept"});
+    let unresolved = json!({"appDepot":{"entryPoints":[{"id":"future","target":{"type":"TreeFile","path":"missing.txt"},"extension":{"kept":true}}]},"other":"kept","largeInteger":u64::MAX});
     let next_etag = format!("\"declarations-{association_id}-2\"");
     let (status, body) = request(
         addr,
@@ -1853,6 +1914,10 @@ async fn acknowledged_range_survives_real_process_kill() {
         serde_json::from_slice::<Value>(&body).unwrap()["data"]["appDepot"]["entryPoints"][0]
             ["extension"]["kept"],
         true
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["data"]["largeInteger"],
+        json!(u64::MAX)
     );
     assert_eq!(assess(unresolved)["items"][0]["status"], "Missing");
     let (status, body) = request(

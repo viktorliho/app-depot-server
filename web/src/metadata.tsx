@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react'
+import { parseExactJson } from './api'
 
 export type MetadataScope = 'app' | 'release' | 'association'
 
@@ -14,7 +15,7 @@ const object = (value: unknown): value is Record<string, unknown> => value !== n
 
 function documentBlock(text: string): { data: Record<string, unknown>; block: Record<string, unknown> } {
   let parsed: unknown
-  try { parsed = JSON.parse(text) } catch { throw new Error('Correct the JSON value before using standard fields.') }
+  try { parsed = parseExactJson(text) } catch { throw new Error('Correct the JSON value or use a browser that preserves exact JSON numbers before using standard fields.') }
   if (!object(parsed)) throw new Error('Standard fields require a JSON object. Use the JSON editor to preserve other values, including null.')
   const block = parsed.appDepot
   if (block !== undefined && !object(block)) throw new Error('appDepot must be an object to use standard fields. The JSON editor can still preserve this value.')

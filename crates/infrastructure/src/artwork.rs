@@ -157,7 +157,7 @@ fn validate_ico_directory(bytes: &[u8]) -> Result<(), CatalogError> {
     if directory_end > bytes.len() {
         return Err(CatalogError::InvalidImage);
     }
-    for entry in bytes[6..directory_end].chunks_exact(16) {
+    for entry in bytes[6..directory_end].as_chunks::<16>().0 {
         let length = u32::from_le_bytes(entry[8..12].try_into().unwrap()) as usize;
         let offset = u32::from_le_bytes(entry[12..16].try_into().unwrap()) as usize;
         if length == 0

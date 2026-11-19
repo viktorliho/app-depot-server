@@ -174,7 +174,7 @@ async fn inventory(
         let offset: usize = parts[2]
             .parse()
             .map_err(|_| app_depot_application::upload::UploadError::InvalidCursor)?;
-        if offset == 0 || offset % size != 0 || offset > i64::MAX as usize {
+        if offset == 0 || !offset.is_multiple_of(size) || offset > i64::MAX as usize {
             return Err(app_depot_application::upload::UploadError::InvalidCursor.into());
         }
         offset

@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router'
-import { apiRequest, idempotencyKey, jsonBody, resource, type Artifact, type Association, type Channel, type ChannelMove,
+import { apiRequest, idempotencyKey, jsonBody, parseExactJson, resource, type Artifact, type Association, type Channel, type ChannelMove,
   type Declaration, type DeclarationRevision, type DeclarationSnapshot, type DepotApp, type Operation,
   type Page, type Release } from './api'
 import { ActionLink, EmptyState, LoadingState, PageHeader, ProblemNotice, StatusBadge, TechnicalDetails } from './components'
@@ -164,7 +164,7 @@ export function DeclarationEditor({ path, editable, title, scope }: { path: stri
   }
   function save(event: FormEvent) {
     event.preventDefault()
-    try { void put(JSON.parse(text)) } catch { setError(new Error('Enter valid JSON. The value null is allowed.')) }
+    try { void put(parseExactJson(text)) } catch { setError(new Error('Enter valid JSON in a browser that preserves exact numbers. The value null is allowed.')) }
   }
   async function inspect(id: string) {
     try { setSelected((await apiRequest<DeclarationRevision>(`${path}/revisions/${id}`, { authenticated: true })).value) }

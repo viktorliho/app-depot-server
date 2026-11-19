@@ -671,6 +671,16 @@ try {
   await associationDeclarations.getByText('Saved as a new declaration revision.').waitFor()
   await associationDeclarations.getByRole('button', { name: 'Show revision history' }).click()
   const firstAssociationId = await page.evaluate(async id => (await (await fetch(`/api/v1/releases/${id}/artifacts?pageSize=10`)).json()).items[0].id, releaseId)
+  const fileLaunchAssessment = await page.evaluate(async id => {
+    const response = await fetch(`/api/v1/associations/${id}/entry-points/validate`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: { appDepot: { entryPoints: [{ id: 'file', target: { type: 'ArtifactFile' },
+        platforms: ['linux/x86_64'], launch: { method: 'NativePortableV1' } }] } } })
+    })
+    return { status: response.status, body: await response.json() }
+  }, firstAssociationId)
+  if (fileLaunchAssessment.status !== 200 || fileLaunchAssessment.body.items[0].status !== 'Valid' ||
+      fileLaunchAssessment.body.items[0].launchStatus !== 'Valid') throw new Error('Portable File target assessment failed')
   await page.getByRole('button', { name: 'Inspect revision' }).nth(await emptyRevisionIndex(page, `/associations/${firstAssociationId}/declarations`)).click()
   await page.getByRole('button', { name: 'Restore as new revision' }).click()
   await page.getByText('Saved as a new declaration revision.').first().waitFor()
@@ -726,6 +736,14 @@ try {
   await page.getByText('Saved Draft for Portal Draft Edited').waitFor({ timeout: 30000 })
   await page.getByRole('link', { name: 'Open release' }).click()
   const treeAssociationId = await associationWithRoot(page, releaseId, 'browser-tree')
+  await page.evaluate(async id => {
+    const path = `/api/v1/associations/${id}/declarations`
+    const current = await fetch(path)
+    const session = await (await fetch('/api/v1/auth/sessions/current')).json()
+    const saved = await fetch(path, { method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': session.csrfToken,
+      'If-Match': current.headers.get('ETag') }, body: '{"data":{"custom":{"big":18446744073709551615},"appDepot":{"extension":{"keep":true}}}}' })
+    if (!saved.ok) throw new Error(`Could not seed exact declaration: ${saved.status}`)
+  }, treeAssociationId)
   const treeArtifactId = await page.evaluate(async id => (await (await fetch(`/api/v1/associations/${id}`)).json()).artifactId, treeAssociationId)
   integratedIds = { appId: draftId, releaseId, associationId: treeAssociationId, artifactId: treeArtifactId }
   const referenceStatuses = await page.evaluate(async id => {
@@ -766,6 +784,29 @@ try {
   await page.getByLabel('Target operating systems and CPU architectures (one per line; optional)').fill('linux/x86_64')
   await page.getByRole('button', { name: 'Save entry points' }).click()
   await page.getByText('Entry points saved as a new declaration revision.').waitFor()
+  await page.getByLabel('Execution method').selectOption('native')
+  await page.getByLabel('Working directory').selectOption('custom')
+  await page.getByLabel('Tree directory path').fill('browser-tree/nested')
+  await page.getByRole('button', { name: 'Add argument' }).click()
+  await page.getByLabel('Argument 1').fill('--windowed')
+  await page.getByRole('button', { name: 'Add argument' }).click()
+  await page.getByRole('button', { name: 'Save entry points' }).click()
+  await page.getByText('Entry points saved as a new declaration revision.').waitFor()
+  const savedLaunch = await page.evaluate(async id => {
+    const text = await (await fetch(`/api/v1/associations/${id}/declarations`)).text()
+    const data = JSON.parse(text).data
+    return { exact: text.includes('18446744073709551615'), method: data.appDepot.entryPoints[0].launch.method,
+      directory: data.appDepot.entryPoints[0].launch.workingDirectory, arguments: data.appDepot.entryPoints[0].launch.arguments,
+      unknown: data.appDepot.extension.keep }
+  }, treeAssociationId)
+  if (!savedLaunch.exact || savedLaunch.method !== 'NativePortableV1' || savedLaunch.directory !== 'browser-tree/nested' ||
+      JSON.stringify(savedLaunch.arguments) !== JSON.stringify(['--windowed', '']) || savedLaunch.unknown !== true) {
+    throw new Error(`Structured portable launch did not preserve declaration JSON: ${JSON.stringify(savedLaunch)}`)
+  }
+  await page.reload()
+  if (await page.getByLabel('Execution method').inputValue() !== 'native' ||
+      await page.getByLabel('Tree directory path').inputValue() !== 'browser-tree/nested' ||
+      await page.getByLabel('Argument 1').inputValue() !== '--windowed') throw new Error('Portable launch controls did not reload saved values')
   await page.getByRole('row', { name: /tree\.txt/ }).getByRole('button', { name: 'Add entry point' }).click()
   await page.getByRole('button', { name: 'Add entry point' }).last().click()
   await page.getByLabel('Label (optional)').last().fill('Alternative')
@@ -795,7 +836,7 @@ try {
   await page.getByText('📄 zero-50.txt').waitFor()
   await page.getByLabel('Search original paths').fill('tree.txt')
   await page.getByRole('button', { name: 'Search', exact: true }).click()
-  await page.getByText('browser-tree/nested/tree.txt').waitFor()
+  await page.getByText('📄 browser-tree/nested/tree.txt', { exact: true }).waitFor()
   await page.reload()
   await page.getByRole('heading', { name: 'Artifact Explorer' }).waitFor()
   if (await page.getByLabel('Label (optional)').inputValue() !== 'Tree script') throw new Error('Entry point label was not restored after reload')
