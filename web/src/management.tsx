@@ -7,6 +7,7 @@ import { ActionLink, EmptyState, LoadingState, PageHeader, ProblemNotice, Status
 import { useAuth } from './portal'
 import { useResource } from './use-resource'
 import { StandardMetadataForm, supportsStandardFields, type MetadataScope } from './metadata'
+import { ArtworkThumbnail } from './artwork'
 
 const enc = encodeURIComponent
 const canManage = (app: DepotApp, user: { id: string; serverAdmin: boolean }) => user.serverAdmin || user.id === app.ownerId
@@ -272,7 +273,7 @@ export function ReleaseDetail() {
   if (current.loading) return <LoadingState label="Loading release…" />
   if (current.error) return <><PageHeader title="Release unavailable" /><ProblemNotice error={current.error} retry={current.retry} /></>
   if (release!.appId !== app.id) return <ProblemNotice error={new Error('This release does not belong to the selected application.')} />
-  return <><PageHeader title={release!.version || 'Unversioned release'} description="Release details" actions={mutable ? <ActionLink to={`/apps/${app.id}/releases/${releaseId}/artifacts/new`}>Add Artifact</ActionLink> : undefined} />
+  return <><PageHeader title={release!.version || 'Unversioned release'} description={`Release in ${app.name}`} icon={<ArtworkThumbnail app={app} />} actions={mutable ? <ActionLink to={`/apps/${app.id}/releases/${releaseId}/artifacts/new`}>Add Artifact</ActionLink> : undefined} />
     <section className="panel"><div className="identity-line"><StatusBadge value={release!.state} /><StatusBadge value={app.visibility} /></div>
       <p>Publication fixes the Artifact composition. Application visibility controls whether Published content is public.</p>
       <TechnicalDetails><code>Release ID: {releaseId}</code></TechnicalDetails></section>

@@ -5,11 +5,12 @@ use crate::{
     upload::promote_file,
 };
 use app_depot_application::Principal;
-use image::{ImageFormat, ImageReader, Limits};
+use image::{DynamicImage, ImageFormat, ImageReader, Limits};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{Row, SqlitePool};
 use std::{
+    borrow::Cow,
     fs::{self, File, OpenOptions},
     io::{Cursor, Write},
     path::Path,
@@ -128,19 +129,57 @@ pub async fn get(
     if !valid_role(role) {
         return Err(CatalogError::NotFound);
     }
-    let row = sqlx::query("SELECT w.* FROM artwork_bindings w JOIN apps a ON a.id=w.app_id WHERE w.app_id=? AND w.role=? AND (a.owner_id=? OR ?=1 OR (a.visibility='Public' AND a.state='Published' AND (?=1 OR (SELECT anonymous_read_enabled FROM server_settings WHERE id=1)=1)))")
+    // A canonical logo remains readable through the older Steam role when no
+    // explicit legacy binding exists. Writes still target the requested role.
+    let row = sqlx::query("SELECT w.* FROM artwork_bindings w JOIN apps a ON a.id=w.app_id WHERE w.app_id=? AND (w.role=? OR (?='steam.logo' AND w.role='logo')) AND (a.owner_id=? OR ?=1 OR (a.visibility='Public' AND a.state='Published' AND (?=1 OR (SELECT anonymous_read_enabled FROM server_settings WHERE id=1)=1))) ORDER BY CASE WHEN w.role=? THEN 0 ELSE 1 END LIMIT 1")
         .bind(app_id)
+        .bind(role)
         .bind(role)
         .bind(principal.map(|actor| actor.id.as_str()).unwrap_or(""))
         .bind(principal.map(|actor| actor.server_admin as i64).unwrap_or(0))
         .bind(principal.is_some() as i64)
+        .bind(role)
         .fetch_optional(pool)
         .await?
         .ok_or(CatalogError::NotFound)?;
     from_row(row)
 }
 
-fn inspect(bytes: &[u8]) -> Result<(&'static str, u32, u32), CatalogError> {
+fn validate_ico_directory(bytes: &[u8]) -> Result<(), CatalogError> {
+    if bytes.len() < 6 || bytes[..4] != [0, 0, 1, 0] {
+        return Err(CatalogError::InvalidImage);
+    }
+    let count = u16::from_le_bytes([bytes[4], bytes[5]]) as usize;
+    if count == 0 || count > 256 {
+        return Err(CatalogError::InvalidImage);
+    }
+    let directory_end = 6 + count * 16;
+    if directory_end > bytes.len() {
+        return Err(CatalogError::InvalidImage);
+    }
+    for entry in bytes[6..directory_end].chunks_exact(16) {
+        let length = u32::from_le_bytes(entry[8..12].try_into().unwrap()) as usize;
+        let offset = u32::from_le_bytes(entry[12..16].try_into().unwrap()) as usize;
+        if length == 0
+            || offset < directory_end
+            || offset
+                .checked_add(length)
+                .is_none_or(|end| end > bytes.len())
+        {
+            return Err(CatalogError::InvalidImage);
+        }
+    }
+    Ok(())
+}
+
+struct PreparedImage<'a> {
+    bytes: Cow<'a, [u8]>,
+    mime: &'static str,
+    width: u32,
+    height: u32,
+}
+
+fn prepare_image<'a>(role: &str, bytes: &'a [u8]) -> Result<PreparedImage<'a>, CatalogError> {
     fn image_error(error: image::ImageError) -> CatalogError {
         match error {
             image::ImageError::Limits(_) => CatalogError::ImageTooLarge,
@@ -158,6 +197,10 @@ fn inspect(bytes: &[u8]) -> Result<(&'static str, u32, u32), CatalogError> {
         ImageFormat::Png => "image/png",
         ImageFormat::Jpeg => "image/jpeg",
         ImageFormat::WebP => "image/webp",
+        ImageFormat::Ico if role == "icon" => {
+            validate_ico_directory(bytes)?;
+            "image/png"
+        }
         _ => return Err(CatalogError::UnsupportedImage),
     };
     let mut limits = Limits::default();
@@ -170,10 +213,37 @@ fn inspect(bytes: &[u8]) -> Result<(&'static str, u32, u32), CatalogError> {
     if width == 0 || height == 0 || (width as u64) * (height as u64) > 16_000_000 {
         return Err(CatalogError::ImageTooLarge);
     }
+    if format == ImageFormat::Ico && (width > 1024 || height > 1024) {
+        return Err(CatalogError::ImageTooLarge);
+    }
     let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
     reader.limits(limits);
-    reader.decode().map_err(image_error)?;
-    Ok((mime, width, height))
+    let decoded = reader.decode().map_err(image_error)?;
+    if decoded.width() != width || decoded.height() != height {
+        return Err(CatalogError::InvalidImage);
+    }
+    if format == ImageFormat::Ico {
+        let mut output = Cursor::new(Vec::new());
+        DynamicImage::ImageRgba8(decoded.to_rgba8())
+            .write_to(&mut output, ImageFormat::Png)
+            .map_err(image_error)?;
+        let output = output.into_inner();
+        if output.len() > MAX_IMAGE_BYTES {
+            return Err(CatalogError::ImageTooLarge);
+        }
+        return Ok(PreparedImage {
+            bytes: Cow::Owned(output),
+            mime,
+            width,
+            height,
+        });
+    }
+    Ok(PreparedImage {
+        bytes: Cow::Borrowed(bytes),
+        mime,
+        width,
+        height,
+    })
 }
 
 fn request_hash(app_id: &str, role: &str, validator: &str, digest: &str) -> String {
@@ -220,8 +290,13 @@ pub async fn put(
         return Err(CatalogError::StaleEtag);
     }
     manageable(pool, principal, app_id).await?;
-    let (mime, width, height) = inspect(bytes)?;
-    let digest = format!("{:x}", Sha256::digest(bytes));
+    let PreparedImage {
+        bytes: stored_bytes,
+        mime,
+        width,
+        height,
+    } = prepare_image(role, bytes)?;
+    let digest = format!("{:x}", Sha256::digest(stored_bytes.as_ref()));
     let hash = request_hash(app_id, role, validator, &digest);
     if let Some(item) = replay(pool, principal, "ArtworkPut", key, &hash).await? {
         return Ok(item);
@@ -238,8 +313,20 @@ pub async fn put(
         id: claim_id.clone(),
     };
     let result = put_claimed(
-        pool, root, principal, key, app_id, role, validator, bytes, mime, width, height, &digest,
-        &hash, &claim_id,
+        pool,
+        root,
+        principal,
+        key,
+        app_id,
+        role,
+        validator,
+        stored_bytes.as_ref(),
+        mime,
+        width,
+        height,
+        &digest,
+        &hash,
+        &claim_id,
     )
     .await;
     // The drop guard also clears a claim if the request future is cancelled.
@@ -414,4 +501,70 @@ pub async fn recover_claims(pool: &SqlitePool, root: &Path) -> Result<(), Catalo
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod image_tests {
+    use super::{prepare_image, CatalogError, MAX_IMAGE_BYTES};
+    use image::ImageFormat;
+
+    #[test]
+    fn multi_resolution_ico_normalizes_to_png_with_alpha() {
+        let input = include_bytes!("../../server/tests/fixtures/artwork-multi.ico");
+        let super::PreparedImage {
+            bytes,
+            mime,
+            width,
+            height,
+        } = prepare_image("icon", input).unwrap();
+        assert_eq!(mime, "image/png");
+        assert_eq!((width, height), (64, 64));
+        assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+        let decoded = image::load_from_memory_with_format(&bytes, ImageFormat::Png).unwrap();
+        assert_eq!(decoded.to_rgba8().get_pixel(0, 0)[3], 0);
+        assert_eq!(decoded.to_rgba8().get_pixel(32, 32)[3], 255);
+    }
+
+    #[test]
+    fn bmp_ico_is_supported_but_only_for_icon() {
+        let input = include_bytes!("../../server/tests/fixtures/artwork-bmp.ico");
+        let super::PreparedImage {
+            bytes,
+            mime,
+            width,
+            height,
+        } = prepare_image("icon", input).unwrap();
+        assert_eq!((mime, width, height), ("image/png", 32, 32));
+        assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+        let decoded = image::load_from_memory_with_format(&bytes, ImageFormat::Png).unwrap();
+        assert_eq!(decoded.to_rgba8().get_pixel(0, 0)[3], 0);
+        assert_eq!(decoded.to_rgba8().get_pixel(16, 16)[3], 255);
+        assert!(matches!(
+            prepare_image("logo", input),
+            Err(CatalogError::UnsupportedImage)
+        ));
+    }
+
+    #[test]
+    fn malformed_and_oversized_ico_are_rejected() {
+        let malformed = include_bytes!("../../server/tests/fixtures/artwork-malformed.ico");
+        assert!(matches!(
+            prepare_image("icon", malformed),
+            Err(CatalogError::InvalidImage)
+        ));
+        let mut invalid_offset =
+            include_bytes!("../../server/tests/fixtures/artwork-multi.ico").to_vec();
+        invalid_offset[18..22].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(matches!(
+            prepare_image("icon", &invalid_offset),
+            Err(CatalogError::InvalidImage)
+        ));
+        let mut oversized =
+            include_bytes!("../../server/tests/fixtures/artwork-multi.ico").to_vec();
+        oversized.resize(MAX_IMAGE_BYTES + 1, 0);
+        assert!(matches!(
+            prepare_image("icon", &oversized),
+            Err(CatalogError::ImageTooLarge)
+        ));
+    }
 }

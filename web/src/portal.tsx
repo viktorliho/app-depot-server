@@ -3,6 +3,7 @@ import { Link, NavLink, Navigate, Outlet, useLocation, useNavigate, useParams } 
 import { apiRequest, type BrowserSession, type DepotApp, ApiError } from './api'
 import { ActionLink, LoadingState, PageHeader, ProblemNotice, StatusBadge } from './components'
 import { useResource } from './use-resource'
+import { ArtworkThumbnail } from './artwork'
 
 type AuthState = { phase: 'checking' | 'setup' | 'guest' | 'authenticated' | 'not-ready' | 'error'; session?: BrowserSession; error?: unknown }
 const AuthContext = createContext<{ state: AuthState; refresh: () => void; signedIn: (session: BrowserSession) => void; signedOut: () => void } | null>(null)
@@ -212,7 +213,7 @@ export function AppShell({ app, children }: { app?: DepotApp; children: ReactNod
     <a className="skip-link" href="#main-content">Skip to content</a>
     <aside ref={sidebar} inert={compact && !menuOpen} className={`sidebar ${menuOpen ? 'sidebar-open' : ''}`}>
       <Link className="brand" to="/">App Depot <span>Portal</span></Link>
-      <div className="workspace-switch">{app ? <><span className="eyebrow">APPLICATION WORKSPACE</span><strong title={app.name}>{app.name}</strong><Link to="/apps">← Switch application</Link></> : <><span className="eyebrow">SERVER WORKSPACE</span><strong>Server</strong></>}</div>
+      <div className="workspace-switch">{app ? <><span className="eyebrow">APPLICATION WORKSPACE</span><div className="workspace-app"><ArtworkThumbnail app={app} /><strong title={app.name}>{app.name}</strong></div><Link to="/apps">← Switch application</Link></> : <><span className="eyebrow">SERVER WORKSPACE</span><strong>Server</strong></>}</div>
       <nav aria-label={app ? 'Application navigation' : 'Server navigation'}>{links.map(link => <NavLink key={link.to} to={link.to} end={link.end} className={({ isActive }) => `nav-link ${isActive ? 'nav-link-active' : ''}`}>{link.label}</NavLink>)}</nav>
       {!app && session.user.serverAdmin && <nav aria-label="Server administration"><span className="eyebrow">ADMINISTRATION</span>{[
         { to: '/admin/users', label: 'Users & Access' }, { to: '/admin/backups', label: 'Backups' },

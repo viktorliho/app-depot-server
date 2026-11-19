@@ -1493,6 +1493,7 @@ paths:
       operationId: getAppArtwork
       tags: [Artwork]
       summary: Read a current artwork binding
+      description: Reading steam.logo uses the explicit legacy binding when present, otherwise resolves canonical logo. The metadata role identifies the actual binding.
       responses:
         '200':
           description: Current artwork metadata
@@ -1509,7 +1510,7 @@ paths:
       operationId: putAppArtwork
       tags: [Artwork]
       summary: Create or replace one current artwork binding
-      description: Creation requires If-None-Match star; replacement requires the current strong If-Match. Bytes are sniffed and fully decoded. Exactly one precondition header is required.
+      description: Creation requires If-None-Match star; replacement requires the current strong If-Match. Bytes are sniffed and fully decoded. ICO is accepted for icon only and normalized to RGBA PNG before CAS registration. Writes always target the explicit role. Exactly one precondition header is required.
       parameters:
       - name: Idempotency-Key
         in: header
@@ -1533,6 +1534,10 @@ paths:
           image/jpeg:
             schema: { type: string, format: binary }
           image/webp:
+            schema: { type: string, format: binary }
+          image/x-icon:
+            schema: { type: string, format: binary }
+          image/vnd.microsoft.icon:
             schema: { type: string, format: binary }
       responses:
         '200':
@@ -1576,7 +1581,7 @@ paths:
     get:
       operationId: downloadAppArtwork
       tags: [Artwork]
-      summary: Read original image bytes through App authorization
+      summary: Read stored image bytes through App authorization
       parameters:
       - name: app_id
         in: path
@@ -1594,7 +1599,7 @@ paths:
         schema: { type: string }
       responses:
         '200':
-          description: Original PNG, JPEG or WebP bytes
+          description: Stored PNG, JPEG or WebP bytes; ICO inputs are normalized to PNG
           headers:
             Cache-Control:
               schema: { type: string, const: no-store }

@@ -124,6 +124,7 @@ async fn app_artwork_is_verified_private_shared_and_restorable() {
     const PNG: &[u8] = include_bytes!("fixtures/artwork.png");
     const JPEG: &[u8] = include_bytes!("fixtures/artwork.jpg");
     const WEBP: &[u8] = include_bytes!("fixtures/artwork.webp");
+    const ICO: &[u8] = include_bytes!("fixtures/artwork-multi.ico");
     let dir = tempfile::tempdir().unwrap();
     init_local(dir.path(), "crash", LocalMode::Dev).unwrap();
     let lock = lock_local(dir.path(), "crash", LocalMode::Dev).unwrap();
@@ -472,6 +473,59 @@ async fn app_artwork_is_verified_private_shared_and_restorable() {
     assert!(image_head
         .to_ascii_lowercase()
         .contains("content-type: image/webp"));
+    let (status, body, head) = request_full(
+        addr,
+        "PUT",
+        &path,
+        &token,
+        &[
+            ("Idempotency-Key", "artwork-ico"),
+            ("If-Match", &webp_tag),
+            ("Content-Type", "image/jpeg"),
+        ],
+        ICO,
+    )
+    .unwrap();
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+    let ico: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(ico["mimeType"], "image/png");
+    assert_eq!(ico["width"], 64);
+    assert_eq!(ico["height"], 64);
+    let ico_tag = response_etag(&head);
+    let (status, normalized, image_head) =
+        request_full(addr, "GET", &format!("{path}/content"), &token, &[], &[]).unwrap();
+    assert_eq!(status, 200);
+    assert!(normalized.starts_with(b"\x89PNG\r\n\x1a\n"));
+    assert_eq!(ico["digest"], format!("{:x}", Sha256::digest(&normalized)));
+    assert!(image_head
+        .to_ascii_lowercase()
+        .contains("content-type: image/png"));
+    assert_eq!(
+        request(
+            addr,
+            "PUT",
+            &format!("/api/v1/apps/{app}/artwork/steam.hero"),
+            &token,
+            &[("Idempotency-Key", "ico-not-icon"), ("If-None-Match", "*")],
+            ICO
+        )
+        .unwrap()
+        .0,
+        422
+    );
+    assert_eq!(
+        request(
+            addr,
+            "PUT",
+            &path,
+            &token,
+            &[("Idempotency-Key", "malformed-ico"), ("If-Match", &ico_tag)],
+            include_bytes!("fixtures/artwork-malformed.ico")
+        )
+        .unwrap()
+        .0,
+        422
+    );
     assert_eq!(
         request(
             addr,
@@ -491,7 +545,7 @@ async fn app_artwork_is_verified_private_shared_and_restorable() {
             "DELETE",
             &path,
             &token,
-            &[("If-Match", &webp_tag)],
+            &[("If-Match", &ico_tag)],
             &[]
         )
         .unwrap()
@@ -608,6 +662,98 @@ async fn app_artwork_is_verified_private_shared_and_restorable() {
             "unreferenced artwork CAS object remains: {digest}"
         );
     }
+    let normalized_digest = ico["digest"].as_str().unwrap();
+    assert!(!dir
+        .path()
+        .join("crash/cas")
+        .join(&normalized_digest[..2])
+        .join(normalized_digest)
+        .exists());
+
+    let logo_path = format!("/api/v1/apps/{app}/artwork/logo");
+    let steam_logo_path = format!("/api/v1/apps/{app}/artwork/steam.logo");
+    assert_eq!(
+        request(
+            addr,
+            "PUT",
+            &logo_path,
+            &token,
+            &[
+                ("Idempotency-Key", "canonical-logo"),
+                ("If-None-Match", "*")
+            ],
+            PNG
+        )
+        .unwrap()
+        .0,
+        200
+    );
+    assert_eq!(
+        request(
+            addr,
+            "GET",
+            &format!("{steam_logo_path}/content"),
+            &token,
+            &[],
+            &[]
+        )
+        .unwrap()
+        .1,
+        PNG
+    );
+    assert_eq!(
+        request(
+            addr,
+            "PUT",
+            &steam_logo_path,
+            &token,
+            &[
+                ("Idempotency-Key", "legacy-steam-logo"),
+                ("If-None-Match", "*")
+            ],
+            JPEG
+        )
+        .unwrap()
+        .0,
+        200
+    );
+    assert_eq!(
+        request(
+            addr,
+            "GET",
+            &format!("{steam_logo_path}/content"),
+            &token,
+            &[],
+            &[]
+        )
+        .unwrap()
+        .1,
+        JPEG
+    );
+    assert_eq!(
+        request(
+            addr,
+            "GET",
+            &format!("{logo_path}/content"),
+            &token,
+            &[],
+            &[]
+        )
+        .unwrap()
+        .1,
+        PNG
+    );
+    let (_, artwork_list) = request(
+        addr,
+        "GET",
+        &format!("/api/v1/apps/{app}/artwork"),
+        &token,
+        &[],
+        &[],
+    )
+    .unwrap();
+    let artwork_list: Value = serde_json::from_slice(&artwork_list).unwrap();
+    assert_eq!(artwork_list["items"].as_array().unwrap().len(), 2);
     drop(server);
     let restored = tempfile::tempdir().unwrap();
     init_local(restored.path(), "crash", LocalMode::Dev).unwrap();

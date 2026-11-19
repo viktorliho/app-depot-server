@@ -57,6 +57,8 @@ code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; overflow-
 .brand span { color: var(--muted); font-weight: 500; }
 .workspace-switch { background: var(--surface-muted); border: 1px solid var(--border); border-radius: 8px; display: grid; gap: 6px; padding: 12px; }
 .workspace-switch strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-app { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.workspace-app .artwork-thumb { width: 36px; height: 36px; }
 .workspace-switch a { font-size: .85rem; }
 .eyebrow { color: var(--muted); font-size: .67rem; font-weight: 700; letter-spacing: .09em; }
 .sidebar nav { display: grid; gap: 4px; }
@@ -82,6 +84,7 @@ code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; overflow-
 .skip-link { position: absolute; left: -9999px; top: 8px; z-index: 30; padding: 8px; background: var(--surface); }
 .skip-link:focus { left: 8px; }
 .page-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; margin-bottom: 24px; }
+.page-heading { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .page-header h1 { margin-bottom: 4px; }
 .page-header p { color: var(--muted); margin: 0; }
 .page-actions { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -121,7 +124,10 @@ code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; overflow-
 .artwork-pick { cursor: pointer; padding: 0; font: inherit; }
 .artwork-pick:hover { border-color: var(--accent); }
 .artwork-pick:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
-.artwork-confirm-preview { max-width: min(100%, 420px); max-height: 300px; object-fit: contain; display: block; margin: 16px 0; background: var(--surface-muted); border: 1px solid var(--border); }
+.artwork-card-details { min-width: 0; }
+.artwork-card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.artwork-card progress { max-width: 100%; width: 140px; vertical-align: middle; }
+.artwork-card .technical-details code { overflow-wrap: anywhere; }
 .facts { display: grid; gap: 10px; margin: 0; }
 .facts > div { display: flex; justify-content: space-between; gap: 16px; }
 .facts dt { color: var(--muted); }

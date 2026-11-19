@@ -2,8 +2,8 @@ import type { ReactNode } from 'react'
 import { Link } from 'react-router'
 import { errorMessage } from './api'
 
-export function PageHeader({ title, description, actions }: { title: string; description?: string; actions?: ReactNode }) {
-  return <div className="page-header"><div><h1>{title}</h1>{description && <p>{description}</p>}</div>{actions && <div className="page-actions">{actions}</div>}</div>
+export function PageHeader({ title, description, actions, icon }: { title: string; description?: string; actions?: ReactNode; icon?: ReactNode }) {
+  return <div className="page-header"><div className="page-heading">{icon}<div><h1>{title}</h1>{description && <p>{description}</p>}</div></div>{actions && <div className="page-actions">{actions}</div>}</div>
 }
 
 export function ActionLink({ to, children, secondary = false }: { to: string; children: ReactNode; secondary?: boolean }) {
