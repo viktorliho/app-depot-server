@@ -7,6 +7,31 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+async function waitForArtworkImage(page, selector, width, height, label) {
+  try {
+    await page.locator(selector).scrollIntoViewIfNeeded({ timeout: 10000 })
+    await page.waitForFunction(({ selector, width, height }) => {
+      const image = document.querySelector(selector)
+      return image instanceof HTMLImageElement && image.complete && image.naturalWidth === width && image.naturalHeight === height
+    }, { selector, width, height }, { timeout: 10000 })
+  } catch (cause) {
+    const details = await page.evaluate(async selector => {
+      const image = document.querySelector(selector)
+      const url = image instanceof HTMLImageElement ? image.currentSrc || image.src : null
+      let httpStatus = null
+      let fetchError = null
+      if (url) {
+        try { httpStatus = (await fetch(url, { signal: AbortSignal.timeout(3000) })).status }
+        catch (error) { fetchError = error instanceof Error ? error.message : String(error) }
+      }
+      return { url, complete: image instanceof HTMLImageElement ? image.complete : null,
+        naturalWidth: image instanceof HTMLImageElement ? image.naturalWidth : null,
+        naturalHeight: image instanceof HTMLImageElement ? image.naturalHeight : null, httpStatus, fetchError }
+    }, selector).catch(error => ({ diagnosticError: String(error) }))
+    throw new Error(`${label}: ${JSON.stringify(details)}`, { cause })
+  }
+}
+
 async function emptyRevisionIndex(page, path) {
   return page.evaluate(async path => {
     const response = await fetch(`/api/v1${path}/revisions?pageSize=100`)
@@ -376,16 +401,14 @@ try {
   await page.keyboard.press('Enter')
   await (await firstPicker).setFiles(new URL('../../crates/server/tests/fixtures/artwork.png', import.meta.url).pathname)
   await page.getByText('Artwork added.').waitFor()
-  await page.locator('img[alt="Icon for Portal Draft"]').waitFor()
-  if (!await page.locator('img[alt="Icon for Portal Draft"]').evaluate(image => image.complete && image.naturalWidth === 2 && image.naturalHeight === 3)) {
-    throw new Error('Artwork preview did not load original image bytes')
-  }
+  const iconPreview = 'img[alt="Icon for Portal Draft"]'
+  await waitForArtworkImage(page, iconPreview, 2, 3, 'Artwork preview did not load original image bytes')
   const oldIconEtag = await page.evaluate(async id => (await (await fetch(`/api/v1/apps/${id}/artwork/icon`)).json()).etag, draftId)
   const invalidPicker = page.waitForEvent('filechooser')
   await page.getByRole('button', { name: 'Replace Icon artwork' }).click()
   await (await invalidPicker).setFiles({ name: 'invalid.png', mimeType: 'image/png', buffer: Buffer.from('not an image') })
   await page.getByRole('alert').first().waitFor()
-  if (!(await page.locator('img[alt="Icon for Portal Draft"]').isVisible())) throw new Error('Invalid replacement hid current artwork')
+  await waitForArtworkImage(page, iconPreview, 2, 3, 'Invalid replacement hid current artwork')
   const replacePicker = page.waitForEvent('filechooser')
   await page.getByRole('button', { name: 'Replace Icon artwork' }).click()
   await (await replacePicker).setFiles(new URL('../../crates/server/tests/fixtures/artwork.jpg', import.meta.url).pathname)
@@ -393,12 +416,12 @@ try {
   const icoPicker = page.waitForEvent('filechooser')
   await page.getByRole('button', { name: 'Replace Icon artwork' }).click()
   await (await icoPicker).setFiles(new URL('../../crates/server/tests/fixtures/artwork-multi.ico', import.meta.url).pathname)
-  await page.waitForFunction(() => [...document.querySelectorAll('img[alt="Icon for Portal Draft"]')].some(image => image.complete && image.naturalWidth === 64))
+  await waitForArtworkImage(page, iconPreview, 64, 64, 'ICO preview did not load normalized PNG bytes')
   const icoMetadata = await page.evaluate(async id => (await (await fetch(`/api/v1/apps/${id}/artwork/icon`)).json()), draftId)
   if (icoMetadata.mimeType !== 'image/png' || icoMetadata.width !== 64 || icoMetadata.height !== 64) throw new Error('Browser ICO upload was not normalized to PNG')
   await page.goto(`${base}apps`)
-  await page.locator('table .artwork-thumb img').first().waitFor()
-  if (!await page.locator('table .artwork-thumb img').first().evaluate(image => image.complete && image.naturalWidth === 64)) throw new Error('Application list did not show the ICO icon')
+  const listIcon = `table tbody tr:has(a[href="/apps/${draftId}"]) .artwork-thumb img`
+  await waitForArtworkImage(page, listIcon, 64, 64, 'Application list did not show the ICO icon')
   await page.goto(`${base}apps/${draftId}/artwork`)
   await page.getByRole('heading', { name: 'Artwork', exact: true }).waitFor()
   const staleArtwork = await page.evaluate(async ({ id, etag }) => {
