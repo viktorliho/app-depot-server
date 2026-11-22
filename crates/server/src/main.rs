@@ -31,6 +31,7 @@ mod declarations;
 mod diagnostics;
 mod download;
 mod import_source;
+mod recipes;
 mod server_import;
 mod upload;
 
@@ -266,6 +267,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     auth: auth_state.clone(),
                     root: Arc::new(lock.path.clone()),
                 }))
+                .merge(recipes::router(auth_state.clone()))
                 .merge(declarations::router(auth_state.clone()))
                 .merge(diagnostics::router(diagnostics::DiagnosticsState {
                     auth: auth_state.clone(),

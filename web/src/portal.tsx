@@ -243,4 +243,4 @@ export function AppWorkspace() {
 
 export function NotFound() { return <AppShell><PageHeader title="Page not found" description="This portal page is unavailable." /><ActionLink to="/apps" secondary>Open applications</ActionLink></AppShell> }
 
-export function AppIdentity({ app }: { app: DepotApp }) { return <div className="identity-line"><span>App publication: <StatusBadge value={app.state} /></span><span>Visibility: <StatusBadge value={app.visibility} /></span></div> }
+export function AppIdentity({ app }: { app: DepotApp }) { return <div className="identity-line">{app.kind === 'derived' && <StatusBadge value="Derived" />}<span>App publication: <StatusBadge value={app.state} /></span><span>Visibility: <StatusBadge value={app.visibility} /></span></div> }

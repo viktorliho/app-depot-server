@@ -360,7 +360,7 @@ async fn capabilities(State(state): State<DownloadState>) -> Json<serde_json::Va
         vec![]
     };
     Json(
-        json!({"apiVersion":"1.0.0","build":embedded_build_info(),"ingestionModes":["BareFile","BareTree","ZipImport"],"zipMethods":["Store","Deflate"],"treeIdentity":"adtree:v1:sha256","fileIdentity":"adfile:sha256","uploadRanges":true,"downloadRanges":true,
+        json!({"apiVersion":"1.0.0","recipeVersions":[1],"build":embedded_build_info(),"ingestionModes":["BareFile","BareTree","ZipImport"],"zipMethods":["Store","Deflate"],"treeIdentity":"adtree:v1:sha256","fileIdentity":"adfile:sha256","uploadRanges":true,"downloadRanges":true,
         "limits":{"maxPageSize":1000,"maxConcurrentRanges":8,"maxUploadBytes":1125899906842624u64},"features":features}),
     )
 }

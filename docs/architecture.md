@@ -1,12 +1,12 @@
 # App Depot Server architecture
 
-This document defines the current product contract. App Depot Server is a self-hosted service for storing, cataloging, publishing and distributing arbitrary software artifacts. Publication requires only an App name and one file or a directory tree containing at least one regular file. Software-specific declarations are optional. The Server need not determine whether content is executable and never executes uploaded payloads. Installation, execution, runtime management and device integration belong to independent clients.
+This document defines the current product contract. App Depot Server is a self-hosted service for storing, cataloging, publishing and distributing arbitrary software artifacts. Standard App publication requires only an App name and one file or a directory tree containing at least one regular file. Derived App publication requires a valid RecipeV1. Software-specific declarations are optional. The Server need not determine whether content is executable and never executes uploaded payloads. Installation, execution, runtime management and device integration belong to independent clients.
 
 ## 1. Entities and identities
 
-An **App** has a stable server-generated UUID, a human-readable name, a separate mutable slug, an owner, visibility, optional declarations and Draft or Published state. Changing its name or slug does not change its UUID. A freed slug may be reused.
+An **App** has a stable server-generated UUID, a human-readable name, a separate mutable slug, an owner, visibility, optional declarations and Draft or Published state. Changing its name or slug does not change its UUID. The App kind is chosen at creation and is immutable. Existing and upload-created Apps are `standard`. A `derived` App has its own catalog identity, artwork, declarations and lifecycle. A freed slug may be reused.
 
-A **Release** belongs to an App and has a stable internal ID, an optional user-visible version and optional declarations. For a minimal upload, the Server creates a Release as an implicit technical revision: users need not manually create or name it. A Published Release contains at least one Artifact.
+A **Release** belongs to an App and has a stable internal ID, an optional user-visible version and optional declarations. For a minimal upload, the Server creates a Release as an implicit technical revision: users need not manually create or name it. A Published Standard Release contains at least one Artifact. A Published Derived Release owns a frozen [RecipeV1](recipe-v1.md). Its installation plan uses authorized associations in dependency Releases and adds no materialized Artifact to the Server.
 
 An **Artifact** is one immutable file or directory tree with a content identity. An Artifact tree contains at least one regular file. The same content may be used by multiple Releases. A **Release–Artifact association** attaches an Artifact to one Release and owns Artifact-specific declarations in that Release's context. Identical bytes may have different declarations in different Releases; shared byte storage does not merge mutable metadata.
 
@@ -22,7 +22,7 @@ The portable representation uses `/` to separate components and preserves their 
 
 **Upload** transfers and verifies content; it does not publish it. **Registration** binds an App, Release, Artifact and verified CAS references but does not automatically publish the Release either. **Draft** permits editing; a Draft App may have no payload. **Publication** is an explicit operation making a complete Release available subject to visibility and access policy. **Visibility** governs access to metadata and content rather than Release state: Published may remain Private.
 
-The minimal user flow is to provide an App name, select a file or directory, wait for receipt and verification, then publish immediately or continue in Draft. The Server creates the App, implicit Release and Artifact association without requiring a version, platform, entrypoint, installer, manifest, category or other software metadata. Draft Release composition may change. Publication freezes composition; changing a Published Release's Artifact composition requires a new Release. Editing declarations does not. If the last Published Release is deleted, the App returns to Draft.
+The minimal user flow is to provide an App name, select a file or directory, wait for receipt and verification, then publish immediately or continue in Draft. The Server creates the App, implicit Release and Artifact association without requiring a version, platform, entrypoint, installer, manifest, category or other software metadata. Draft Release composition may change. Publication freezes composition. Changing a Published Release's Artifact associations or Recipe requires a new Release. Editing declarations does not. If the last Published Release is deleted, the App returns to Draft.
 
 Channels are optional. Each channel is a named mutable reference from an App to one of its Published Releases; there are no mandatory built-in channels. Moving a channel changes neither the Release, Artifact content nor access rights. Movement history is retained for the lifetime of the App, except records that must be removed with a deleted Release or App.
 
@@ -61,6 +61,8 @@ Once incorporated, Server-stored declarations are authoritative for App Depot cl
 ## 6. Revision history and consistent reads
 
 App, Release and each Release–Artifact association have independent declaration histories. Each saved change creates a revision; older revisions remain available while their owner exists, and the current revision is identifiable. Restoring previous metadata creates a new revision. Concurrent edits do not silently overwrite one another. Clients detect declaration changes independently of content identity. A declaration revision creates neither a new Artifact nor a new Release and changes neither bytes nor Published Release composition.
+
+A Draft Recipe uses the Release validator for edits and publication. It is independent of declaration revisions. A resolved installation lock captures one authorized catalog snapshot and remains separate from the published definition and from client installation state.
 
 When the API returns combined declarations from multiple levels, the response represents a logically consistent snapshot. Permanent deletion of an owner removes its revision history; an association's history belongs to the association, not to shared CAS bytes.
 

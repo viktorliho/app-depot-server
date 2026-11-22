@@ -262,7 +262,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let app = create_app(&pool, &actor, "channel-app", "Channels")
+        let app = create_app(&pool, &actor, "channel-app", "Channels", Default::default())
             .await
             .unwrap();
         let first = create_release(&pool, &actor, "channel-first", &app.id, None)

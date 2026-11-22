@@ -32,6 +32,8 @@ impl Deref for CatalogState {
 #[serde(deny_unknown_fields)]
 struct AppCreate {
     name: String,
+    #[serde(default)]
+    kind: app_depot_domain::AppKind,
 }
 
 #[derive(Deserialize)]
@@ -65,7 +67,7 @@ fn key(headers: &HeaderMap) -> Result<&str, ApiError> {
     Ok(value)
 }
 
-fn json_response(
+pub(crate) fn json_response(
     status: StatusCode,
     location: Option<String>,
     etag: String,
@@ -154,7 +156,12 @@ async fn list_releases(
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let principal = reader(&state, &headers).await?;
-    let items = storage::list_releases(&state.pool, principal.as_ref(), &app_id).await?;
+    let published = match query.get("order").map(String::as_str) {
+        None => false,
+        Some("published") => true,
+        Some(_) => return Err(storage::CatalogError::Invalid.into()),
+    };
+    let items = storage::list_releases(&state.pool, principal.as_ref(), &app_id, published).await?;
     let scope = format!(
         "{}:{}",
         app_id,
@@ -163,7 +170,13 @@ async fn list_releases(
             .map(|actor| actor.id.as_str())
             .unwrap_or("anonymous")
     );
-    page(&items, &query, "releases1", &scope, "")
+    page(
+        &items,
+        &query,
+        "releases1",
+        &scope,
+        if published { "published" } else { "" },
+    )
 }
 
 async fn create_app(
@@ -172,7 +185,14 @@ async fn create_app(
     Json(input): Json<AppCreate>,
 ) -> Result<Response, ApiError> {
     let principal = authorize(&state, &headers, true).await?;
-    let app = storage::create_app(&state.pool, &principal, key(&headers)?, &input.name).await?;
+    let app = storage::create_app(
+        &state.pool,
+        &principal,
+        key(&headers)?,
+        &input.name,
+        input.kind,
+    )
+    .await?;
     json_response(
         StatusCode::CREATED,
         Some(format!("/api/v1/apps/{}", app.id)),

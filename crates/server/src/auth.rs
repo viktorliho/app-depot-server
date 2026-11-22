@@ -142,6 +142,24 @@ impl From<CatalogError> for ApiError {
                 "invalid_request",
                 "Invalid request",
             ),
+            CatalogError::Recipe(reason) => {
+                use app_depot_domain::recipe::RecipeError::*;
+                let code = match reason {
+                    Required => "recipe_required",
+                    Invalid => "invalid_recipe",
+                    UnsupportedVersion => "unsupported_recipe_version",
+                    Unavailable => "dependency_unavailable",
+                    Cycle => "dependency_cycle",
+                    Conflict => "dependency_conflict",
+                    Platform => "platform_mismatch",
+                    Association => "recipe_association",
+                    Source => "recipe_source",
+                    Collision => "recipe_collision",
+                    Launch => "recipe_launch",
+                    Limit => "recipe_limit",
+                };
+                (StatusCode::UNPROCESSABLE_ENTITY, code, reason.title())
+            }
             CatalogError::InvalidCursor => {
                 (StatusCode::BAD_REQUEST, "invalid_cursor", "Invalid cursor")
             }

@@ -2251,3 +2251,517 @@ async fn acknowledged_range_survives_real_process_kill() {
     let list: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(list["items"][0]["id"], backup_id);
 }
+
+struct RecipeHttp {
+    addr: SocketAddr,
+    token: String,
+}
+
+impl RecipeHttp {
+    fn json(
+        &self,
+        method: &str,
+        path: &str,
+        headers: &[(&str, &str)],
+        input: Option<Value>,
+        expected: u16,
+    ) -> (Value, String) {
+        let mut headers = headers.to_vec();
+        headers.push(("Content-Type", "application/json"));
+        let bytes = input.map(|v| v.to_string()).unwrap_or_default();
+        let (status, body, head) = request_full(
+            self.addr,
+            method,
+            &format!("/api/v1{path}"),
+            &self.token,
+            &headers,
+            bytes.as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(
+            status,
+            expected,
+            "{method} {path}: {}",
+            String::from_utf8_lossy(&body)
+        );
+        (serde_json::from_slice(&body).unwrap(), head)
+    }
+
+    fn create(&self, path: &str, body: Value) -> String {
+        let key = uuid::Uuid::new_v4().to_string();
+        self.json("POST", path, &[("Idempotency-Key", &key)], Some(body), 201)
+            .0["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    fn publish(&self, id: &str, expected: u16) -> Value {
+        let path = format!("/releases/{id}");
+        let etag = response_etag(&self.json("GET", &path, &[], None, 200).1);
+        self.json(
+            "POST",
+            &format!("{path}/publish"),
+            &[
+                ("Idempotency-Key", &format!("publish-{id}")),
+                ("If-Match", &etag),
+            ],
+            None,
+            expected,
+        )
+        .0
+    }
+
+    fn save_recipe(&self, id: &str, recipe: Value, expected: u16) -> Value {
+        let path = format!("/releases/{id}/recipe");
+        let etag = response_etag(&self.json("GET", &path, &[], None, 200).1);
+        self.json("PUT", &path, &[("If-Match", &etag)], Some(recipe), expected)
+            .0
+    }
+
+    fn resolve(&self, id: &str, expected: u16) -> Value {
+        self.json(
+            "GET",
+            &format!("/releases/{id}/recipe/lock?platform=linux%2Fx86_64"),
+            &[],
+            None,
+            expected,
+        )
+        .0
+    }
+
+    fn file_bytes(&self, upload: &str, file: &Value, bytes: &[u8]) {
+        if file["transferRequired"] != false {
+            let file_id = file["fileId"].as_str().unwrap();
+            let status = request(
+                self.addr,
+                "PUT",
+                &format!("/api/v1/uploads/{upload}/files/{file_id}"),
+                &self.token,
+                &[
+                    ("Content-Type", "application/octet-stream"),
+                    (
+                        "Content-Range",
+                        &format!("bytes 0-{}/{}", bytes.len() - 1, bytes.len()),
+                    ),
+                ],
+                bytes,
+            )
+            .unwrap()
+            .0;
+            assert_eq!(status, 204);
+        }
+    }
+
+    fn upload_fixture(&self, release: &str, bytes: &[u8], tree: bool) -> Value {
+        let mode = if tree { "BareTree" } else { "BareFile" };
+        let digest = format!("{:x}", Sha256::digest(bytes));
+        let mut input = json!({"mode":mode,"target":{"releaseId":release}});
+        if !tree {
+            input["file"] = json!({"size":bytes.len(),"sha256":digest});
+        }
+        let (upload, _) = self.json(
+            "POST",
+            "/uploads",
+            &[("Idempotency-Key", &format!("upload-{release}"))],
+            Some(input),
+            201,
+        );
+        let id = upload["id"].as_str().unwrap();
+        if tree {
+            let inventory = self.json("POST", &format!("/uploads/{id}/inventory"), &[("Idempotency-Key", "recipe-fixture-inventory")], Some(json!({"entries":[
+                {"type":"Directory","path":"data"},
+                {"type":"Directory","path":"data/empty"},
+                {"type":"File","path":"data/resources.dat","size":bytes.len(),"sha256":digest,"executable":false}
+            ]})), 200).0;
+            self.json(
+                "POST",
+                &format!("/uploads/{id}/inventory/complete"),
+                &[("Idempotency-Key", "recipe-fixture-complete")],
+                None,
+                200,
+            );
+            self.file_bytes(id, &inventory["entries"][2], bytes);
+        } else {
+            self.file_bytes(id, &upload["file"], bytes);
+        }
+        self.json(
+            "POST",
+            &format!("/uploads/{id}/finalize"),
+            &[("Idempotency-Key", &format!("finalize-{release}"))],
+            None,
+            200,
+        )
+        .0
+    }
+
+    fn label_artifact(&self, fixture: &Value, label: &str) {
+        let association = fixture["associationId"].as_str().unwrap();
+        let path = format!("/associations/{association}/declarations");
+        let tag = response_etag(&self.json("GET", &path, &[], None, 200).1);
+        self.json(
+            "PUT",
+            &path,
+            &[("If-Match", &tag)],
+            Some(json!({"data":{"appDepot":{"label":label}}})),
+            200,
+        );
+    }
+
+    fn public(&self, app: &str) {
+        let path = format!("/apps/{app}");
+        let tag = response_etag(&self.json("GET", &path, &[], None, 200).1);
+        self.json(
+            "PATCH",
+            &path,
+            &[("If-Match", &tag)],
+            Some(json!({"visibility":"Public"})),
+            200,
+        );
+    }
+}
+
+#[tokio::test]
+async fn derived_recipe_lifecycle_resolves_synthetic_artifacts_and_preserves_permissions() {
+    let dir = tempfile::tempdir().unwrap();
+    init_local(dir.path(), "crash", LocalMode::Dev).unwrap();
+    let lock = lock_local(dir.path(), "crash", LocalMode::Dev).unwrap();
+    let pool = open_catalog(&lock).await.unwrap();
+    let setup = auth::prepare_setup(&pool).await.unwrap().unwrap();
+    let password = "fixture secret phrase 12345";
+    assert!(auth::complete_setup(&pool, &setup, "admin", password)
+        .await
+        .unwrap());
+    let admin = auth::verify_password(&pool, "admin", password)
+        .await
+        .unwrap()
+        .unwrap();
+    let reader = auth::create_user(&pool, &admin, "test-reader", "reader", password, false)
+        .await
+        .unwrap();
+    let (admin_token, _) = auth::issue_token(&pool, &admin.id).await.unwrap();
+    let (reader_token, _) = auth::issue_token(&pool, &reader.id).await.unwrap();
+    sqlx::query("UPDATE server_settings SET anonymous_read_enabled=1 WHERE id=1")
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+    drop(lock);
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    let server = start(dir.path(), addr);
+    let owner = RecipeHttp {
+        addr,
+        token: admin_token,
+    };
+    let reader = RecipeHttp {
+        addr,
+        token: reader_token,
+    };
+    let anonymous = RecipeHttp {
+        addr,
+        token: String::new(),
+    };
+
+    let game = owner.create("/apps", json!({"name":"Synthetic Windows game"}));
+    assert_eq!(
+        owner
+            .json("GET", &format!("/apps/{game}"), &[], None, 200)
+            .0["kind"],
+        "standard"
+    );
+    let game_release = owner.create(
+        &format!("/apps/{game}/releases"),
+        json!({"version":"game-data"}),
+    );
+    let game_content = owner.upload_fixture(&game_release, b"synthetic game assets", true);
+    owner.publish(&game_release, 200);
+    owner.public(&game);
+
+    let port = owner.create(
+        "/apps",
+        json!({"name":"Synthetic native source port","kind":"standard"}),
+    );
+    let first = owner.create(
+        &format!("/apps/{port}/releases"),
+        json!({"version":"port-1"}),
+    );
+    let second = owner.create(
+        &format!("/apps/{port}/releases"),
+        json!({"version":"port-2"}),
+    );
+    let first_content = owner.upload_fixture(&first, b"first native fixture", false);
+    owner.label_artifact(&first_content, "Native executable");
+    owner.publish(&first, 200);
+    let channel = format!("/apps/{port}/channels/stable");
+    let channel_etag = response_etag(
+        &owner
+            .json(
+                "PUT",
+                &channel,
+                &[("If-None-Match", "*")],
+                Some(json!({"releaseId":first})),
+                201,
+            )
+            .1,
+    );
+
+    let derived = owner.create(
+        "/apps",
+        json!({"name":"Synthetic native game edition","kind":"derived"}),
+    );
+    assert_eq!(
+        owner
+            .json("GET", &format!("/apps/{derived}"), &[], None, 200)
+            .0["kind"],
+        "derived"
+    );
+    let release = owner.create(
+        &format!("/apps/{derived}/releases"),
+        json!({"version":"edition-1"}),
+    );
+    assert_eq!(owner.publish(&release, 422)["code"], "recipe_required");
+    let root = format!("/releases/{release}/recipe");
+    let before = owner.json("GET", &root, &[], None, 200);
+    assert!(before.0.is_null());
+    let original_etag = response_etag(&before.1);
+    let recipe = json!({
+        "version":1,"dependencies":{
+            "base":{"appId":game,"selector":{"type":"release","releaseId":game_release}},
+            "port":{"appId":port,"selector":{"type":"channel","name":"stable"}}
+        },"targets":{"linux/x86_64":{
+            "operations":[{"dependency":"base","source":"data","destination":"assets"},
+                {"dependency":"port","associationLabel":"Native executable","destination":"bin/game","executable":true}],
+            "launch":{"path":"bin/game","workingDirectory":"assets","arguments":["--literal","a b"]}
+        }}
+    });
+    let mut invalid = recipe.clone();
+    invalid["version"] = json!(2);
+    assert_eq!(
+        owner.save_recipe(&release, invalid, 422)["code"],
+        "unsupported_recipe_version"
+    );
+    let mut invalid = recipe.clone();
+    invalid["dependencies"]["base"]["appId"] = json!("synthetic-windows-game");
+    assert_eq!(
+        owner.save_recipe(&release, invalid, 422)["code"],
+        "invalid_recipe"
+    );
+    let mut invalid = recipe.clone();
+    invalid["targets"]["linux/x86_64"]["operations"][0]["destination"] = json!("data/../escape");
+    assert_eq!(
+        owner.save_recipe(&release, invalid, 422)["code"],
+        "invalid_recipe"
+    );
+    let mut missing = recipe.clone();
+    missing["dependencies"]["base"]["selector"]["releaseId"] =
+        json!(uuid::Uuid::new_v4().to_string());
+    owner.save_recipe(&release, missing, 200);
+    assert_eq!(
+        owner.publish(&release, 422)["code"],
+        "dependency_unavailable"
+    );
+    let mut mismatch = recipe.clone();
+    mismatch["dependencies"]["port"]["platforms"] = json!(["windows/x86_64"]);
+    owner.save_recipe(&release, mismatch, 200);
+    assert_eq!(owner.resolve(&release, 422)["code"], "platform_mismatch");
+
+    let mut conflict = recipe.clone();
+    conflict["targets"]["linux/x86_64"]["operations"].as_array_mut().unwrap()
+        .push(json!({"dependency":"base","source":"data/resources.dat","destination":"bin/game","executable":true}));
+    owner.save_recipe(&release, conflict.clone(), 200);
+    assert_eq!(owner.resolve(&release, 422)["code"], "recipe_collision");
+    conflict["targets"]["linux/x86_64"]["operations"][2]["collision"] = json!("replaceFile");
+    owner.save_recipe(&release, conflict, 200);
+    assert_eq!(
+        owner.resolve(&release, 200)["files"]["bin/game"]["artifactId"],
+        game_content["artifactId"]
+    );
+
+    owner.save_recipe(&release, recipe.clone(), 200);
+    assert_eq!(
+        owner
+            .json(
+                "PUT",
+                &root,
+                &[("If-Match", &original_etag)],
+                Some(recipe.clone()),
+                412
+            )
+            .0["code"],
+        "stale_etag"
+    );
+    owner.publish(&release, 200);
+    owner.public(&derived);
+    assert_eq!(
+        owner.save_recipe(&release, recipe.clone(), 409)["code"],
+        "immutable_release"
+    );
+    let stored = owner.json("GET", &root, &[], None, 200).0;
+    let early = owner.resolve(&release, 200);
+    assert_eq!(early, owner.resolve(&release, 200));
+    assert_eq!(early["releases"][&release]["dependencies"]["port"], first);
+    assert_eq!(
+        early["directories"],
+        json!(["assets", "assets/empty", "bin"])
+    );
+    assert_eq!(
+        early["files"]["assets/resources.dat"]["associationId"],
+        game_content["associationId"]
+    );
+    assert_eq!(early["launch"]["arguments"], json!(["--literal", "a b"]));
+    assert_eq!(
+        reader.resolve(&release, 422)["code"],
+        "dependency_unavailable"
+    );
+    assert_eq!(
+        reader.json("GET", &root, &[], None, 422).0["code"],
+        "dependency_unavailable"
+    );
+    owner.public(&port);
+    assert_eq!(anonymous.resolve(&release, 200), early);
+
+    let second_content = owner.upload_fixture(&second, b"second native fixture", false);
+    owner.label_artifact(&second_content, "Native executable");
+    owner.publish(&second, 200);
+    owner.json(
+        "PUT",
+        &channel,
+        &[("If-Match", &channel_etag)],
+        Some(json!({"releaseId":second})),
+        200,
+    );
+    let moved = owner.resolve(&release, 200);
+    assert_ne!(
+        early["files"]["bin/game"]["sha256"],
+        moved["files"]["bin/game"]["sha256"]
+    );
+    assert_eq!(
+        moved["files"]["bin/game"]["artifactId"],
+        second_content["artifactId"]
+    );
+    assert_eq!(owner.json("GET", &root, &[], None, 200).0, stored);
+    let old = early["files"]["bin/game"]["artifactId"].as_str().unwrap();
+    assert_eq!(
+        request(
+            addr,
+            "GET",
+            &format!("/api/v1/artifacts/{old}/content"),
+            "",
+            &[],
+            &[]
+        )
+        .unwrap()
+        .1,
+        b"first native fixture"
+    );
+
+    let wrapper = owner.create(
+        "/apps",
+        json!({"name":"Synthetic assembled wrapper","kind":"derived"}),
+    );
+    let top = owner.create(&format!("/apps/{wrapper}/releases"), json!({}));
+    let transitive = json!({"version":1,"dependencies":{
+        "child":{"appId":derived,"selector":{"type":"latest"}}
+    },"targets":{"linux/x86_64":{
+        "operations":[{"dependency":"child","destination":"edition"}],
+        "launch":{"path":"edition/bin/game"}
+    }}});
+    owner.save_recipe(&top, transitive, 200);
+    owner.publish(&top, 200);
+    let wrapped = owner.resolve(&top, 200);
+    assert_eq!(wrapped["releases"][&top]["dependencies"]["child"], release);
+    assert_eq!(
+        wrapped["files"]["edition/bin/game"],
+        moved["files"]["bin/game"]
+    );
+
+    let cycle = owner.create(&format!("/apps/{derived}/releases"), json!({}));
+    let mut cyclic = recipe.clone();
+    cyclic["dependencies"]["port"] =
+        json!({"appId":wrapper,"selector":{"type":"release","releaseId":top}});
+    cyclic["targets"]["linux/x86_64"]["operations"][1]
+        .as_object_mut()
+        .unwrap()
+        .remove("associationLabel");
+    owner.save_recipe(&cycle, cyclic, 200);
+    assert_eq!(owner.publish(&cycle, 422)["code"], "dependency_cycle");
+
+    let latest = owner.create(
+        &format!("/apps/{derived}/releases"),
+        json!({"version":"edition-latest"}),
+    );
+    let mut latest_recipe = recipe.clone();
+    latest_recipe["dependencies"]["port"]["selector"] = json!({"type":"latest"});
+    owner.save_recipe(&latest, latest_recipe.clone(), 200);
+    assert_eq!(
+        owner.resolve(&latest, 200)["releases"][&latest]["dependencies"]["port"],
+        second
+    );
+    latest_recipe["dependencies"]["other-port"] =
+        json!({"appId":port,"selector":{"type":"release","releaseId":first}});
+    latest_recipe["targets"]["linux/x86_64"]["operations"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"dependency":"other-port","destination":"old-port"}));
+    owner.save_recipe(&latest, latest_recipe, 200);
+    assert_eq!(owner.resolve(&latest, 422)["code"], "dependency_conflict");
+
+    let multiple = owner.create(
+        &format!("/apps/{port}/releases"),
+        json!({"version":"port-multiple"}),
+    );
+    let extra = owner.upload_fixture(&multiple, b"distinct native executable fixture", false);
+    owner.label_artifact(&extra, "Native executable");
+    let alternate = owner
+        .json(
+            "POST",
+            &format!("/releases/{multiple}/artifacts"),
+            &[("Idempotency-Key", "recipe-multiple-associations")],
+            Some(json!({"artifactId":game_content["artifactId"]})),
+            201,
+        )
+        .0;
+    owner.label_artifact(
+        &json!({"associationId":alternate["id"]}),
+        "Native executable",
+    );
+    owner.publish(&multiple, 200);
+
+    let mut ambiguous = recipe.clone();
+    ambiguous["dependencies"]["port"]["selector"] = json!({"type":"latest"});
+    owner.save_recipe(&latest, ambiguous.clone(), 200);
+    assert_eq!(owner.resolve(&latest, 422)["code"], "recipe_association");
+    let op = &mut ambiguous["targets"]["linux/x86_64"]["operations"][1];
+    op.as_object_mut().unwrap().remove("associationLabel");
+    op["associationId"] = extra["associationId"].clone();
+    owner.save_recipe(&latest, ambiguous, 200);
+    assert_eq!(
+        owner.resolve(&latest, 200)["files"]["bin/game"]["artifactId"],
+        extra["artifactId"]
+    );
+
+    drop(server);
+    let _restarted = start(dir.path(), addr);
+    assert_eq!(owner.resolve(&top, 200), wrapped);
+    assert_eq!(owner.json("GET", &root, &[], None, 200).0, stored);
+    let second_path = format!("/releases/{second}");
+    let second_etag = response_etag(&owner.json("GET", &second_path, &[], None, 200).1);
+    owner.json(
+        "DELETE",
+        &second_path,
+        &[
+            ("If-Match", &second_etag),
+            ("Idempotency-Key", "delete-recipe-dependency"),
+        ],
+        None,
+        202,
+    );
+    assert_eq!(
+        owner.resolve(&release, 422)["code"],
+        "dependency_unavailable"
+    );
+    assert_eq!(owner.json("GET", &root, &[], None, 200).0, stored);
+}

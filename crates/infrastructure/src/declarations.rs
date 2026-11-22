@@ -247,9 +247,15 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let app = create_app(&pool, &actor, "declarations-app", "Declarations")
-            .await
-            .unwrap();
+        let app = create_app(
+            &pool,
+            &actor,
+            "declarations-app",
+            "Declarations",
+            Default::default(),
+        )
+        .await
+        .unwrap();
         let release = create_release(&pool, &actor, "declarations-release", &app.id, None)
             .await
             .unwrap();

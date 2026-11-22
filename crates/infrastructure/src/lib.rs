@@ -19,6 +19,7 @@ pub mod backups;
 pub mod catalog;
 pub mod channels;
 pub mod declarations;
+pub mod recipes;
 pub mod restore;
 pub mod upload;
 mod zip_import;
@@ -441,6 +442,62 @@ pub async fn seed_dev(pool: &SqlitePool) -> Result<(), StorageError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn recipe_migration_preserves_legacy_catalog_and_release_order() {
+        let dir = tempfile::tempdir().unwrap();
+        init_local(dir.path(), "legacy", LocalMode::Dev).unwrap();
+        let lock = lock_local(dir.path(), "legacy", LocalMode::Dev).unwrap();
+        let options = SqliteConnectOptions::new()
+            .filename(lock.path.join("db/catalog.sqlite"))
+            .create_if_missing(true)
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+        let mut legacy = sqlx::migrate!("./migrations");
+        legacy
+            .migrations
+            .to_mut()
+            .retain(|migration| migration.version < 12);
+        legacy.run(&pool).await.unwrap();
+        sqlx::raw_sql(
+            "INSERT INTO users(id, username, password_hash, server_admin, publish_permission) VALUES('owner', 'owner', 'fixture', 0, 1);
+             INSERT INTO apps(id, name, slug, owner_id, visibility, state, etag_version)
+                 VALUES('legacy-app', 'Legacy App', 'legacy-app', 'owner', 'Public', 'Published', 7);
+             INSERT INTO releases(id, app_id, version, state, etag_version) VALUES
+                 ('older', 'legacy-app', '10', 'Published', 5),
+                 ('newer', 'legacy-app', '2', 'Published', 6),
+                 ('draft', 'legacy-app', '3', 'Draft', 1);",
+        ).execute(&pool).await.unwrap();
+        pool.close().await;
+
+        let pool = open_catalog(&lock).await.unwrap();
+        let app: (String, String, i64) =
+            sqlx::query_as("SELECT name, kind, etag_version FROM apps WHERE id='legacy-app'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(app, ("Legacy App".into(), "standard".into(), 7));
+        let releases: Vec<(String, Option<i64>, i64)> = sqlx::query_as(
+            "SELECT id, publication_order, etag_version FROM releases ORDER BY publication_order DESC",
+        ).fetch_all(&pool).await.unwrap();
+        assert_eq!(
+            releases,
+            vec![
+                ("newer".into(), Some(2), 6),
+                ("older".into(), Some(1), 5),
+                ("draft".into(), None, 1)
+            ]
+        );
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM recipes")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+    }
 
     #[tokio::test]
     async fn migration_and_fixture_are_idempotent() {

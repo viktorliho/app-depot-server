@@ -219,3 +219,10 @@ td small { display: block; color: var(--muted); margin-top: 4px; }
 .link-button { border: 0; padding: 0; background: transparent; color: var(--accent); font: inherit; cursor: pointer; text-align: left; }
 .link-button:hover { text-decoration: underline; }
 .link-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+.recipe-panel fieldset { margin: 0; min-width: 0; }
+.recipe-panel legend { font-weight: 600; padding: 0 .3rem; }
+.recipe-panel details > summary { cursor: pointer; font-weight: 600; }
+.recipe-targets { display: flex; flex-wrap: wrap; gap: .5rem 1rem; }
+.recipe-panel input[type="checkbox"] { width: auto; margin-right: .35rem; }
+.recipe-layout { max-height: 22rem; overflow: auto; overflow-wrap: anywhere; }

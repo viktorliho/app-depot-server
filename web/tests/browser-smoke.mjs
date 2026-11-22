@@ -56,6 +56,67 @@ async function associationWithRoot(page, releaseId, rootPath) {
   }, { releaseId, rootPath })
 }
 
+async function verifyVisualRecipe(page, base, preview, treeAssociationId) {
+  await page.goto(`${base}artifacts/new-app`, { waitUntil: 'domcontentloaded' })
+  await page.getByLabel('App name').fill('Synthetic native source port')
+  await page.getByLabel('File', { exact: true }).setInputFiles({ name: 'source-port', mimeType: 'application/octet-stream', buffer: Buffer.from('synthetic executable bytes') })
+  await page.getByRole('button', { name: 'Upload and publish' }).click()
+  await page.getByText('Published Synthetic native source port').waitFor()
+
+  await page.goto(`${base}apps/new`, { waitUntil: 'domcontentloaded' })
+  await page.getByLabel('Application name').fill('Synthetic derived edition')
+  await page.getByLabel('Application kind').selectOption('derived')
+  await page.getByRole('button', { name: 'Create Draft application' }).click()
+  await page.getByRole('heading', { name: 'Synthetic derived edition' }).waitFor()
+  await page.getByText('Derived', { exact: true }).waitFor()
+  await page.getByRole('link', { name: 'Create Draft release' }).first().click()
+  await page.getByLabel('Version (optional)').fill('Edition 1')
+  await page.getByRole('button', { name: 'Create Draft release' }).click()
+  const editor = page.locator('.recipe-panel')
+  await editor.getByText('Add dependency application').click()
+  for (const name of ['Portal Draft Edited', 'Synthetic native source port']) {
+    await editor.getByLabel('Search dependency applications').fill(name)
+    await editor.getByRole('button', { name: 'Search', exact: true }).click()
+    await editor.getByRole('button', { name: `Add ${name}`, exact: true }).click()
+  }
+  const game = editor.getByRole('group', { name: 'Portal Draft Edited', exact: true })
+  await game.getByLabel('Release policy').selectOption('release')
+  const releasePicker = game.getByLabel('Published release', { exact: true })
+  await releasePicker.locator('option').nth(1).waitFor({ state: 'attached', timeout: 7000 }).catch(async cause => {
+    throw new Error(`Release picker did not load: ${await game.innerText()}`, { cause })
+  })
+  // The most recently published release also has the Tree Artifact for this fixture.
+  await releasePicker.selectOption({ index: 1 })
+  const first = editor.getByRole('group', { name: 'Copy 1', exact: true })
+  const artifactChoice = first.getByLabel('Source Artifact')
+  await artifactChoice.selectOption(`id:${treeAssociationId}`)
+  await first.getByText('Browse source tree').click()
+  await first.getByRole('button', { name: 'Open browser-tree', exact: true }).click()
+  await first.getByRole('button', { name: 'Open nested', exact: true }).click()
+  await first.getByRole('button', { name: 'Use this directory' }).click()
+  await first.getByLabel('Destination path').fill('assets')
+
+  const second = editor.getByRole('group', { name: 'Copy 2', exact: true })
+  await second.getByLabel('Destination path').fill('bin/source-port')
+  await second.getByLabel('Mark selected file executable').check()
+  await second.getByRole('button', { name: 'Move up' }).click()
+  await editor.getByRole('button', { name: 'Preview installation layout' }).click()
+  await editor.locator('.recipe-layout').getByText('assets/tree.txt', { exact: true }).waitFor()
+  await editor.getByLabel('Launch executable').selectOption('bin/source-port')
+  await editor.getByLabel('Working directory').fill('assets')
+  await editor.getByLabel('Arguments (one literal argument per line)').fill('--content\nassets')
+  await editor.getByRole('button', { name: 'Save and validate recipe' }).click()
+  await editor.getByText('Draft saved. All targets validated.').waitFor()
+  await editor.getByRole('button', { name: 'Publish release' }).click()
+  await editor.getByRole('heading', { name: 'Currently resolved components' }).waitFor()
+  await editor.locator('.recipe-layout').getByText('assets/tree.txt', { exact: true }).waitFor()
+  if (preview) await restartLanPreview(preview)
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await editor.locator('.recipe-layout').getByText('assets/tree.txt', { exact: true }).waitFor()
+  await editor.getByText('bin/source-port', { exact: true }).first().waitFor()
+  if (await editor.getByRole('button', { name: 'Save and validate recipe' }).count()) throw new Error('Published recipe was editable')
+}
+
 async function stopServer(child, label) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return
   const waitForExit = timeoutMs => new Promise(resolve => {
@@ -893,6 +954,9 @@ try {
   })
   await page.getByRole('button', { name: 'Publish release' }).click()
   await page.getByText('Release published. Artifact composition is now immutable.').waitFor()
+  stage('creating and publishing a Derived App through the visual editor')
+  await verifyVisualRecipe(page, base, preview, treeAssociationId)
+  await page.goto(`${base}apps/${draftId}/releases/${releaseId}`, { waitUntil: 'domcontentloaded' })
   stage('verifying publication, channels and App lifecycle')
   await page.getByRole('navigation', { name: 'Application navigation' }).getByRole('link', { name: 'Overview' }).click()
   await page.getByText('App publication: Published').waitFor()
@@ -1580,7 +1644,7 @@ try {
   })
   await page.reload()
   await page.getByRole('heading', { name: 'Sign in' }).waitFor()
-  console.log('Browser smoke passed: setup, auth, App/Release management, File/Tree/ZIP Explorer and entry points, metadata, artwork, declarations, channels, deletion, administration, account, operations, LAN HTTP, backup and isolated restore')
+  console.log('Browser smoke passed: setup, auth, App/Release management, File/Tree/ZIP Explorer and entry points, metadata, artwork, declarations, channels, visual recipes, deletion, administration, account, operations, LAN HTTP, backup and isolated restore')
 } catch (failure) {
   console.error(`Browser smoke failure context: ${JSON.stringify(await diagnosePreview(page))}`)
   throw failure

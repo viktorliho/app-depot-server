@@ -1649,6 +1649,10 @@ paths:
         schema:
           type: string
         description: Opaque cursor; invalid/expired returns 400.
+      - name: order
+        in: query
+        schema: { type: string, const: published }
+        description: Limits the list to Published Releases, newest publication first. Omit for the existing visibility and ID order.
       responses:
         '200':
           description: '200'
@@ -1991,6 +1995,267 @@ paths:
       security:
       - bearerAuth: []
       - cookieAuth: []
+  /releases/{release_id}/recipe:
+    parameters:
+    - name: release_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    get:
+      operationId: getRecipe
+      tags: [Recipes]
+      summary: Read a Derived Release definition
+      description: A manager may also read a Draft and receives null if no recipe is stored. Other readers require Published visibility and accessible, resolvable dependencies for every target.
+      security:
+      - {}
+      - bearerAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: Recipe definition or an unconfigured Draft.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+            ETag:
+              description: Strong Release validator used for Recipe PUT and publication.
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: '#/components/schemas/RecipeV1'
+                - type: 'null'
+        '401':
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          description: Recipe validation or resolution failure.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+    put:
+      operationId: replaceDraftRecipe
+      tags: [Recipes]
+      summary: Replace the complete Draft definition after structural validation
+      parameters:
+      - name: If-Match
+        in: header
+        required: true
+        schema: { type: string }
+      - name: X-CSRF-Token
+        in: header
+        schema: { type: string }
+        description: Required for cookie authentication along with a same-origin Origin.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecipeV1'
+      responses:
+        '200':
+          description: Saved definition with the new Release validator.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+            ETag:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecipeV1'
+        '401':
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '412':
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          description: Recipe validation or resolution failure.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '428':
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+  /releases/{release_id}/recipe/lock:
+    parameters:
+    - name: release_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    get:
+      operationId: resolveRecipeLock
+      tags: [Recipes]
+      summary: Resolve exact releases and a deterministic file layout for one platform
+      description: A manager may resolve a Draft for validation. A fresh resolution of a Published definition follows current selection and access state.
+      parameters:
+      - name: platform
+        in: query
+        required: true
+        schema:
+          $ref: '#/components/schemas/RecipePlatform'
+      security:
+      - {}
+      - bearerAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          description: Snapshot of the resolved graph and installation layout for one platform.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecipeLockV1'
+        '401':
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          description: Recipe validation or resolution failure.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+  /releases/{release_id}/recipe/preview:
+    parameters:
+    - name: release_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    post:
+      operationId: previewDraftRecipeLayout
+      tags: [Recipes]
+      summary: Preview layout paths for an unsaved Draft definition
+      description: Manager only. Does not validate whether the root launch target exists. Supply a syntactically valid placeholder launch path before choosing the actual file.
+      parameters:
+      - name: platform
+        in: query
+        required: true
+        schema:
+          $ref: '#/components/schemas/RecipePlatform'
+      - name: X-CSRF-Token
+        in: header
+        schema: { type: string }
+        description: Required for cookie authentication along with a same-origin Origin.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecipeV1'
+      responses:
+        '200':
+          description: Installation paths for choosing a file and working directory.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecipeLayout'
+        '401':
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          description: Recipe validation or resolution failure.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
   /releases/{release_id}/publish:
     post:
       operationId: publishRelease
@@ -2067,6 +2332,12 @@ paths:
                 $ref: '#/components/schemas/Problem'
         '412':
           description: RFC 9457 Problem Details. Hidden private resources use 404.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          description: Recipe validation or resolution failure.
           content:
             application/problem+json:
               schema:
@@ -5268,6 +5539,189 @@ components:
         etag: { type: string }
       required: [appId, role, id, digest, mimeType, size, width, height, etag]
       additionalProperties: false
+    AppKind:
+      type: string
+      enum: [standard, derived]
+    RecipePlatform:
+      type: string
+      enum: [linux/x86_64, linux/aarch64, windows/x86_64, windows/aarch64, macos/x86_64, macos/aarch64]
+    RecipeV1:
+      type: object
+      required: [version, dependencies, targets]
+      additionalProperties: false
+      properties:
+        version: { type: integer, const: 1 }
+        dependencies:
+          type: object
+          minProperties: 1
+          maxProperties: 32
+          propertyNames: { pattern: '^[A-Za-z0-9_-]{1,64}$' }
+          additionalProperties:
+            $ref: '#/components/schemas/RecipeDependency'
+        targets:
+          type: object
+          minProperties: 1
+          maxProperties: 6
+          propertyNames:
+            $ref: '#/components/schemas/RecipePlatform'
+          additionalProperties:
+            $ref: '#/components/schemas/RecipeTarget'
+    RecipeDependency:
+      type: object
+      required: [appId, selector]
+      additionalProperties: false
+      properties:
+        appId: { type: string, format: uuid }
+        selector:
+          oneOf:
+          - type: object
+            required: [type]
+            additionalProperties: false
+            properties:
+              type: { const: latest }
+          - type: object
+            required: [type, releaseId]
+            additionalProperties: false
+            properties:
+              type: { const: release }
+              releaseId: { type: string, format: uuid }
+          - type: object
+            required: [type, name]
+            additionalProperties: false
+            properties:
+              type: { const: channel }
+              name: { type: string, minLength: 1, maxLength: 255 }
+        platforms:
+          type: [array, 'null']
+          minItems: 1
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/RecipePlatform'
+    RecipeTarget:
+      type: object
+      required: [operations, launch]
+      additionalProperties: false
+      properties:
+        operations:
+          type: array
+          minItems: 1
+          maxItems: 128
+          items:
+            $ref: '#/components/schemas/RecipeCopy'
+        launch:
+          $ref: '#/components/schemas/RecipeLaunch'
+    RecipeCopy:
+      type: object
+      required: [dependency, destination]
+      additionalProperties: false
+      properties:
+        dependency: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' }
+        associationId: { type: [string, 'null'], format: uuid }
+        associationLabel: { type: [string, 'null'], minLength: 1, maxLength: 160 }
+        source:
+          $ref: '#/components/schemas/RecipeRelativePath'
+          default: ''
+        destination:
+          $ref: '#/components/schemas/RecipeRelativePath'
+        executable: { type: boolean, default: false }
+        collision: { type: string, enum: [reject, replaceFile], default: reject }
+      not:
+        required: [associationId, associationLabel]
+        properties:
+          associationId: { type: string }
+          associationLabel: { type: string }
+    RecipeRelativePath:
+      type: string
+      maxLength: 1024
+      description: Portable recipe path. See recipe-v1.md for byte limits, segments, and fields where the empty string is allowed.
+    RecipeLaunch:
+      type: object
+      required: [path]
+      additionalProperties: false
+      properties:
+        path:
+          $ref: '#/components/schemas/RecipeRelativePath'
+          minLength: 1
+        workingDirectory:
+          $ref: '#/components/schemas/RecipeRelativePath'
+          default: ''
+        arguments:
+          type: array
+          maxItems: 64
+          default: []
+          items: { type: string, maxLength: 4096 }
+    RecipeLayout:
+      type: object
+      required: [files, directories, launchCandidates]
+      additionalProperties: false
+      properties:
+        launchCandidates:
+          type: array
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/RecipeRelativePath', minLength: 1 }
+        files:
+          type: array
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/RecipeRelativePath', minLength: 1 }
+        directories:
+          type: array
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/RecipeRelativePath', minLength: 1 }
+    RecipeLockV1:
+      type: object
+      required: [version, appId, releaseId, platform, releases, files, directories, launch]
+      additionalProperties: false
+      properties:
+        version: { type: integer, const: 1 }
+        appId: { type: string, format: uuid }
+        releaseId: { type: string, format: uuid }
+        platform:
+          $ref: '#/components/schemas/RecipePlatform'
+        releases:
+          type: object
+          propertyNames: { format: uuid }
+          additionalProperties:
+            $ref: '#/components/schemas/RecipeLockedRelease'
+        files:
+          type: object
+          propertyNames: { $ref: '#/components/schemas/RecipeRelativePath', minLength: 1 }
+          additionalProperties:
+            $ref: '#/components/schemas/RecipeLockedFile'
+        directories:
+          type: array
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/RecipeRelativePath', minLength: 1 }
+        launch:
+          $ref: '#/components/schemas/RecipeLaunch'
+    RecipeLockedRelease:
+      type: object
+      required: [appId, version, dependencies, artifacts]
+      additionalProperties: false
+      properties:
+        appId: { type: string, format: uuid }
+        version: { type: [string, 'null'] }
+        dependencies:
+          type: object
+          additionalProperties: { type: string, format: uuid }
+        artifacts:
+          type: object
+          propertyNames: { format: uuid }
+          additionalProperties:
+            type: string
+            pattern: '^(adfile:sha256:|adtree:v1:sha256:)[0-9a-f]{64}$'
+    RecipeLockedFile:
+      type: object
+      required: [associationId, artifactId, fileId, sha256, size, executable]
+      additionalProperties: false
+      properties:
+        associationId: { type: string, format: uuid }
+        artifactId:
+          type: string
+          pattern: '^(adfile:sha256:|adtree:v1:sha256:)[0-9a-f]{64}$'
+        fileId: { type: [string, 'null'], format: uuid }
+        sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        size: { type: integer, minimum: 0 }
+        executable: { type: boolean }
     App:
       type: object
       properties:
@@ -5281,6 +5735,8 @@ components:
         ownerId:
           type: string
           format: uuid
+        kind:
+          $ref: '#/components/schemas/AppKind'
         visibility:
           type: string
           enum:
@@ -5296,6 +5752,7 @@ components:
       - name
       - slug
       - ownerId
+      - kind
       - visibility
       - state
       additionalProperties: false
@@ -5305,6 +5762,9 @@ components:
         name:
           type: string
           minLength: 1
+        kind:
+          $ref: '#/components/schemas/AppKind'
+          default: standard
       required:
       - name
       additionalProperties: false
@@ -6304,6 +6764,10 @@ components:
       properties:
         apiVersion:
           type: string
+        recipeVersions:
+          type: array
+          uniqueItems: true
+          items: { type: integer, const: 1 }
         build:
           $ref: '#/components/schemas/BuildInfo'
         ingestionModes:
@@ -6337,6 +6801,7 @@ components:
             type: string
       required:
       - apiVersion
+      - recipeVersions
       - build
       - ingestionModes
       - zipMethods
@@ -6554,6 +7019,66 @@ components:
             const: rate_limited
           type:
             const: urn:app-depot:problem:rate_limited
+      - properties:
+          code:
+            const: recipe_required
+          type:
+            const: urn:app-depot:problem:recipe_required
+      - properties:
+          code:
+            const: invalid_recipe
+          type:
+            const: urn:app-depot:problem:invalid_recipe
+      - properties:
+          code:
+            const: unsupported_recipe_version
+          type:
+            const: urn:app-depot:problem:unsupported_recipe_version
+      - properties:
+          code:
+            const: dependency_unavailable
+          type:
+            const: urn:app-depot:problem:dependency_unavailable
+      - properties:
+          code:
+            const: dependency_cycle
+          type:
+            const: urn:app-depot:problem:dependency_cycle
+      - properties:
+          code:
+            const: dependency_conflict
+          type:
+            const: urn:app-depot:problem:dependency_conflict
+      - properties:
+          code:
+            const: platform_mismatch
+          type:
+            const: urn:app-depot:problem:platform_mismatch
+      - properties:
+          code:
+            const: recipe_association
+          type:
+            const: urn:app-depot:problem:recipe_association
+      - properties:
+          code:
+            const: recipe_source
+          type:
+            const: urn:app-depot:problem:recipe_source
+      - properties:
+          code:
+            const: recipe_collision
+          type:
+            const: urn:app-depot:problem:recipe_collision
+      - properties:
+          code:
+            const: recipe_launch
+          type:
+            const: urn:app-depot:problem:recipe_launch
+      - properties:
+          code:
+            const: recipe_limit
+          type:
+            const: urn:app-depot:problem:recipe_limit
     Login:
       type: object
       properties:
@@ -6829,3 +7354,15 @@ components:
       - progress_changed
       - unsupported_artifact_kind
       - rate_limited
+      - recipe_required
+      - invalid_recipe
+      - unsupported_recipe_version
+      - dependency_unavailable
+      - dependency_cycle
+      - dependency_conflict
+      - platform_mismatch
+      - recipe_association
+      - recipe_source
+      - recipe_collision
+      - recipe_launch
+      - recipe_limit

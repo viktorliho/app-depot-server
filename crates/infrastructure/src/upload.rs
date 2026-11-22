@@ -397,18 +397,19 @@ impl UploadPort for UploadAdapter {
                 if !create_release {
                     return Err(UploadError::Invalid);
                 }
-                let owner: String = sqlx::query_scalar("SELECT owner_id FROM apps WHERE id=?")
-                    .bind(app_id)
-                    .fetch_optional(&mut *tx)
-                    .await
-                    .map_err(db)?
-                    .ok_or(UploadError::NotFound)?;
+                let owner: String =
+                    sqlx::query_scalar("SELECT owner_id FROM apps WHERE id=? AND kind='standard'")
+                        .bind(app_id)
+                        .fetch_optional(&mut *tx)
+                        .await
+                        .map_err(db)?
+                        .ok_or(UploadError::NotFound)?;
                 if !principal.may_manage(&owner) {
                     return Err(UploadError::NotFound);
                 }
             }
             Target::Release { release_id } => {
-                let row = sqlx::query("SELECT a.owner_id, r.state FROM releases r JOIN apps a ON a.id=r.app_id WHERE r.id=?")
+                let row = sqlx::query("SELECT a.owner_id, r.state FROM releases r JOIN apps a ON a.id=r.app_id WHERE r.id=? AND a.kind='standard'")
                     .bind(release_id).fetch_optional(&mut *tx).await.map_err(db)?.ok_or(UploadError::NotFound)?;
                 if !principal.may_manage(&row.get::<String, _>("owner_id")) {
                     return Err(UploadError::NotFound);
@@ -1024,7 +1025,7 @@ impl UploadPort for UploadAdapter {
         }
         let (app_id, release_id) = match &session.public.target {
             Target::Release { release_id } => {
-                let row = sqlx::query("SELECT r.app_id, r.state, a.owner_id FROM releases r JOIN apps a ON a.id=r.app_id WHERE r.id=?")
+                let row = sqlx::query("SELECT r.app_id, r.state, a.owner_id FROM releases r JOIN apps a ON a.id=r.app_id WHERE r.id=? AND a.kind='standard'")
                     .bind(release_id).fetch_optional(&mut *tx).await.map_err(db)?.ok_or(UploadError::NotFound)?;
                 if !principal.may_manage(&row.get::<String, _>("owner_id")) {
                     return Err(UploadError::NotFound);
@@ -1035,12 +1036,13 @@ impl UploadPort for UploadAdapter {
                 (row.get::<String, _>("app_id"), release_id.clone())
             }
             Target::NewRelease { app_id, .. } => {
-                let owner: String = sqlx::query_scalar("SELECT owner_id FROM apps WHERE id=?")
-                    .bind(app_id)
-                    .fetch_optional(&mut *tx)
-                    .await
-                    .map_err(db)?
-                    .ok_or(UploadError::NotFound)?;
+                let owner: String =
+                    sqlx::query_scalar("SELECT owner_id FROM apps WHERE id=? AND kind='standard'")
+                        .bind(app_id)
+                        .fetch_optional(&mut *tx)
+                        .await
+                        .map_err(db)?
+                        .ok_or(UploadError::NotFound)?;
                 if !principal.may_manage(&owner) {
                     return Err(UploadError::NotFound);
                 }

@@ -564,7 +564,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let app = create_app(&pool, &actor, "backup-app", "Backed up")
+        let app = create_app(&pool, &actor, "backup-app", "Backed up", Default::default())
             .await
             .unwrap();
         let release = create_release(&pool, &actor, "backup-release", &app.id, None)

@@ -1,9 +1,28 @@
+pub mod recipe;
+
 /// A file identity is typed separately from a CAS digest.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileArtifactId(String);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TreeArtifactId(String);
+
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AppKind {
+    #[default]
+    Standard,
+    Derived,
+}
+
+impl AppKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Standard => "standard",
+            Self::Derived => "derived",
+        }
+    }
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -12,6 +31,8 @@ pub struct App {
     pub name: String,
     pub slug: String,
     pub owner_id: String,
+    #[serde(default)]
+    pub kind: AppKind,
     pub visibility: String,
     pub state: String,
 }
