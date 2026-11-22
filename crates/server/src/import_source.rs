@@ -273,6 +273,22 @@ pub fn load_roots(data_root: &Path) -> Result<ImportSources, Box<dyn std::error:
 }
 
 impl ImportRoot {
+    pub(crate) fn private_staging(path: PathBuf) -> io::Result<Self> {
+        let directory = Arc::new(open_absolute(&path)?);
+        Ok(Self {
+            id: String::new(),
+            display_name: String::new(),
+            kind: "Staging",
+            container_path: path,
+            allowed_user_ids: HashSet::new(),
+            directory,
+        })
+    }
+
+    pub(crate) fn flat_names(&self, path: &str) -> io::Result<Vec<String>> {
+        fd_entries(&open_relative(&self.directory, path, true)?)
+    }
+
     pub fn available(&self) -> bool {
         let Ok(current) = open_absolute(&self.container_path) else {
             return false;

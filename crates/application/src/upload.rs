@@ -302,6 +302,7 @@ pub trait UploadPort: Send + Sync {
     ) -> Result<StoredSession, UploadError>;
     async fn inventory(&self, id: &str) -> Result<Vec<InventoryEntry>, UploadError>;
     async fn inventory_version(&self, id: &str) -> Result<u64, UploadError>;
+    async fn tree_file_size(&self, id: &str, file_id: &str) -> Result<u64, UploadError>;
     async fn receive(
         &self,
         id: &str,
@@ -666,19 +667,7 @@ impl<P: UploadPort> UploadCoordinator<P> {
             return Err(UploadError::Incomplete);
         }
         let size = if session.public.mode == "BareTree" {
-            self.port
-                .inventory(id)
-                .await?
-                .iter()
-                .find_map(|entry| match entry {
-                    InventoryEntry::File {
-                        file_id: candidate,
-                        size,
-                        ..
-                    } if candidate == file_id => Some(*size),
-                    _ => None,
-                })
-                .ok_or(UploadError::NotFound)?
+            self.port.tree_file_size(id, file_id).await?
         } else {
             if session.public.file().file_id != file_id {
                 return Err(UploadError::NotFound);

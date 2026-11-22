@@ -21,7 +21,15 @@ jobs:
         run: rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Prepare public Inno Setup test fixtures
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends innoextract
+          sh crates/server/tests/fixtures/prepare-gog.sh "$RUNNER_TEMP/gog-fixtures"
+          printf 'GOG_TEST_FIXTURES=%s\n' "$RUNNER_TEMP/gog-fixtures" >> "$GITHUB_ENV"
       - run: cargo test --workspace --locked
+      - run: cargo test --locked -p app-depot-server --bin app-depot-server supported_inno_engine -- --ignored
+      - run: cargo test --locked -p app-depot-server --test upload_http gog_import_recovers -- --ignored
       - run: npm --prefix web ci
       - run: npm --prefix web run test:unit
       - run: npm --prefix web run build

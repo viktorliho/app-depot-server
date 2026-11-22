@@ -3988,6 +3988,74 @@ paths:
       security:
       - bearerAuth: []
       - cookieAuth: []
+  /server-imports/gog/analysis:
+    post:
+      operationId: analyzeGogOfflineInstaller
+      tags: [Server Storage]
+      summary: Analyze a supported offline installer directory
+      parameters:
+      - name: X-CSRF-Token
+        in: header
+        schema: { type: string }
+        description: Required for cookie-authenticated requests.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GogAnalysisRequest'
+      responses:
+        '200':
+          description: Setup choices or a verified report with the analysis identity.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GogAnalysisResult'
+        '401':
+          description: Authentication required.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: Authorization or CSRF check failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: Import root unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: The worker is busy or the source changed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          description: Installer format, input, checksum, volume or limit error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '503':
+          description: Backend or sandbox unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          description: RFC 9457 Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
   /server-imports:
     post:
       operationId: importFromServerStorage
@@ -6068,20 +6136,157 @@ components:
           - { type: 'null' }
       required: [items, nextCursor]
       additionalProperties: false
+    GogAnalysisRequest:
+      type: object
+      required: [rootId, path]
+      additionalProperties: false
+      properties:
+        rootId: { type: string }
+        path: { type: string }
+        setup: { type: [string, 'null'] }
+    GogAnalysisResult:
+      type: object
+      required: [candidates, analysis, analysisId]
+      additionalProperties: false
+      properties:
+        candidates:
+          type: array
+          minItems: 1
+          maxItems: 64
+          items: { type: string }
+        analysis:
+          oneOf:
+          - $ref: '#/components/schemas/GogAnalysis'
+          - type: 'null'
+        analysisId:
+          type: [string, 'null']
+          pattern: '^[0-9a-f]{64}$'
+    GogVolume:
+      type: object
+      required: [name, size, sha256, container]
+      additionalProperties: false
+      properties:
+        name: { type: string }
+        size: { type: integer, minimum: 0 }
+        sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        container: { type: string, enum: [PortableExecutable, InnoDiskSlice, Unknown] }
+    GogAnalysis:
+      type: object
+      required: [setup, productName, installerVersion, installerFormat, gogGameId, engine, engineVersion, volumes, installerLanguages, languageTaggedFiles, redistributableRoots, candidateExecutables, optionalComponents, missingVolumes, listedFileCount, approximateOutputBytes, unknownActions]
+      additionalProperties: false
+      properties:
+        setup: { type: string }
+        productName: { type: string }
+        installerVersion: { type: string, description: Inno Setup data version. }
+        installerFormat: { const: InnoSetup }
+        gogGameId: { type: [string, 'null'], pattern: '^[0-9]+$' }
+        engine: { const: innoextract }
+        engineVersion: { const: '1.9' }
+        volumes:
+          type: array
+          minItems: 1
+          maxItems: 128
+          items:
+            $ref: '#/components/schemas/GogVolume'
+        installerLanguages:
+          type: array
+          uniqueItems: true
+          items: { type: string }
+        languageTaggedFiles:
+          type: object
+          additionalProperties: { type: integer, minimum: 1 }
+        redistributableRoots:
+          type: array
+          uniqueItems: true
+          items: { type: string }
+        candidateExecutables:
+          type: array
+          uniqueItems: true
+          items: { type: string }
+        optionalComponents: { type: 'null' }
+        missingVolumes:
+          type: array
+          maxItems: 0
+        listedFileCount: { type: integer, minimum: 1, maximum: 100000 }
+        approximateOutputBytes: { type: [integer, 'null'], minimum: 0 }
+        unknownActions:
+          type: array
+          items: { type: string }
+    GogReviewHints:
+      type: object
+      additionalProperties: false
+      properties:
+        productName: { type: string, maxLength: 255, default: '' }
+        gameVersion: { type: string, maxLength: 255, default: '' }
+        candidateExecutable: { type: string, maxLength: 1024, default: '' }
+        notes: { type: string, maxLength: 4096, default: '' }
+    GogReview:
+      type: object
+      required: [setup, analysisId]
+      additionalProperties: false
+      properties:
+        setup: { type: string }
+        analysisId: { type: string, pattern: '^[0-9a-f]{64}$' }
+        hints:
+          $ref: '#/components/schemas/GogReviewHints'
+    GogInstallationManifestV1:
+      type: object
+      description: Initial data.appDepot.gogOfflineInstaller association declaration.
+      required: [version, analysis, detected, user, payload, installReadiness]
+      additionalProperties: false
+      properties:
+        version: { const: 1 }
+        analysis:
+          $ref: '#/components/schemas/GogAnalysis'
+        detected:
+          type: object
+          required: [platformFamily, evidence, redistributableRoots, candidateExecutables]
+          additionalProperties: false
+          properties:
+            platformFamily: { const: windows }
+            evidence: { type: string }
+            redistributableRoots:
+              type: array
+              items: { type: string }
+            candidateExecutables:
+              type: array
+              items: { type: string }
+        user:
+          $ref: '#/components/schemas/GogReviewHints'
+        payload:
+          type: object
+          required: [kind, root, fileCount, size]
+          additionalProperties: false
+          properties:
+            kind: { const: Tree }
+            root: { const: '' }
+            fileCount: { type: integer, minimum: 1, maximum: 100000 }
+            size: { type: integer, minimum: 0 }
+        installReadiness: { const: Unknown }
     ServerImportRequest:
       type: object
       properties:
         rootId: { type: string }
         path: { type: string }
-        mode: { type: string, enum: [BareFile, BareTree, ZipImport] }
+        mode: { type: string, enum: [BareFile, BareTree, ZipImport, GogOfflineInstaller] }
         target:
           $ref: '#/components/schemas/UploadTarget'
+        gogReview:
+          $ref: '#/components/schemas/GogReview'
       required: [rootId, path, mode, target]
+      if:
+        properties:
+          mode: { const: GogOfflineInstaller }
+      then:
+        required: [gogReview]
+      else:
+        not:
+          required: [gogReview]
       additionalProperties: false
     ServerImportProgress:
       type: object
       properties:
-        phase: { type: string, enum: [Scanning, Receiving, Verifying, Importing, Committing, Completed, Failed] }
+        phase: { type: string, enum: [Scanning, ExtractingInstaller, Receiving, Verifying, Importing, Committing, Completed, Failed] }
         sessionId: { type: string }
         filesTotal: { type: integer, minimum: 0 }
         filesProcessed: { type: integer, minimum: 0 }
@@ -7079,6 +7284,41 @@ components:
             const: recipe_limit
           type:
             const: urn:app-depot:problem:recipe_limit
+      - properties:
+          code:
+            const: invalid_gog_source
+          type:
+            const: urn:app-depot:problem:invalid_gog_source
+      - properties:
+          code:
+            const: gog_missing_volume
+          type:
+            const: urn:app-depot:problem:gog_missing_volume
+      - properties:
+          code:
+            const: gog_invalid_volume
+          type:
+            const: urn:app-depot:problem:gog_invalid_volume
+      - properties:
+          code:
+            const: gog_unsupported_format
+          type:
+            const: urn:app-depot:problem:gog_unsupported_format
+      - properties:
+          code:
+            const: gog_limit
+          type:
+            const: urn:app-depot:problem:gog_limit
+      - properties:
+          code:
+            const: gog_unavailable
+          type:
+            const: urn:app-depot:problem:gog_unavailable
+      - properties:
+          code:
+            const: source_changed
+          type:
+            const: urn:app-depot:problem:source_changed
     Login:
       type: object
       properties:
@@ -7354,6 +7594,13 @@ components:
       - progress_changed
       - unsupported_artifact_kind
       - rate_limited
+      - invalid_gog_source
+      - gog_missing_volume
+      - gog_invalid_volume
+      - gog_unsupported_format
+      - gog_limit
+      - gog_unavailable
+      - source_changed
       - recipe_required
       - invalid_recipe
       - unsupported_recipe_version

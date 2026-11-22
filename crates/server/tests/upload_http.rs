@@ -2765,3 +2765,148 @@ async fn derived_recipe_lifecycle_resolves_synthetic_artifacts_and_preserves_per
     );
     assert_eq!(owner.json("GET", &root, &[], None, 200).0, stored);
 }
+
+fn installer_stream(
+    addr: SocketAddr,
+    token: &str,
+    key: &str,
+    body: &Value,
+) -> impl Iterator<Item = Value> {
+    use std::io::{BufRead, BufReader};
+
+    let mut stream = TcpStream::connect(addr).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(15)))
+        .unwrap();
+    let body = body.to_string();
+    write!(stream, "POST /api/v1/server-imports HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nAuthorization: Bearer {token}\r\nIdempotency-Key: {key}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len()).unwrap();
+    let mut lines = BufReader::new(stream).lines();
+    assert!(lines.next().unwrap().unwrap().starts_with("HTTP/1.1 200"));
+    lines.map_while(Result::ok).filter_map(|line| {
+        line.strip_prefix("data: ")
+            .map(|data| serde_json::from_str(data).unwrap())
+    })
+}
+
+#[tokio::test]
+#[ignore = "requires innoextract 1.9, Linux Landlock and GOG_TEST_FIXTURES"]
+async fn gog_import_recovers_from_interruption_rejects_changed_source_and_commits_manifest() {
+    let fixtures = std::path::PathBuf::from(std::env::var_os("GOG_TEST_FIXTURES").unwrap());
+    let dir = tempfile::tempdir().unwrap();
+    let managed = init_local(dir.path(), "crash", LocalMode::Dev).unwrap();
+    let lock = lock_local(dir.path(), "crash", LocalMode::Dev).unwrap();
+    let pool = open_catalog(&lock).await.unwrap();
+    let setup = auth::prepare_setup(&pool).await.unwrap().unwrap();
+    let password = "disposable installer test password";
+    assert!(auth::complete_setup(&pool, &setup, "admin", password)
+        .await
+        .unwrap());
+    let admin = auth::verify_password(&pool, "admin", password)
+        .await
+        .unwrap()
+        .unwrap();
+    let (token, _) = auth::issue_token(&pool, &admin.id).await.unwrap();
+    pool.close().await;
+    drop(lock);
+
+    let source = managed.parent().unwrap().join("inbox/install");
+    fs::create_dir_all(&source).unwrap();
+    for entry in fs::read_dir(fixtures.join("multi")).unwrap() {
+        let entry = entry.unwrap();
+        fs::copy(entry.path(), source.join(entry.file_name())).unwrap();
+    }
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    let server = start(dir.path(), addr);
+    let http = RecipeHttp { addr, token };
+    let analysis_path = "/server-imports/gog/analysis";
+    let body = json!({"rootId":"inbox","path":"install"});
+    fs::copy(source.join("spanning.exe"), source.join("other.exe")).unwrap();
+    let ambiguous = http
+        .json("POST", analysis_path, &[], Some(body.clone()), 200)
+        .0;
+    assert_eq!(
+        ambiguous["candidates"],
+        json!(["other.exe", "spanning.exe"])
+    );
+    assert!(ambiguous["analysisId"].is_null());
+    fs::remove_file(source.join("other.exe")).unwrap();
+    let report = http.json("POST", analysis_path, &[], Some(body), 200).0;
+    assert_eq!(report["analysis"]["volumes"].as_array().unwrap().len(), 3);
+    let response = http.create("/apps", json!({"name":"Synthetic import target"}));
+    let release = http.create(
+        &format!("/apps/{response}/releases"),
+        json!({"version":"1"}),
+    );
+    let input = json!({"rootId":"inbox","path":"install","mode":"GogOfflineInstaller",
+        "target":{"releaseId":release},"gogReview":{"setup":"spanning.exe","analysisId":report["analysisId"],"hints":{"gameVersion":"fixture-1"}}});
+
+    // Trailing bytes leave this parser's setup table intact but change the reviewed digest.
+    let setup = source.join("spanning.exe");
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&setup)
+        .unwrap()
+        .write_all(b"changed after review")
+        .unwrap();
+    let failure = installer_stream(addr, &http.token, "changed-installer", &input)
+        .last()
+        .unwrap();
+    assert_eq!(failure["problem"]["code"], "source_changed");
+    fs::copy(fixtures.join("multi/spanning.exe"), setup).unwrap();
+
+    let mut cancelled = installer_stream(addr, &http.token, "cancel-installer", &input);
+    assert!(cancelled.any(|event| event["phase"] == "ExtractingInstaller"));
+    http.json(
+        "DELETE",
+        "/server-imports",
+        &[],
+        Some(json!({"requestKey":"cancel-installer"})),
+        202,
+    );
+    let terminal = cancelled.last().unwrap();
+    assert_eq!(terminal["problem"]["code"], "session_cancelled");
+    assert_eq!(fs::read_dir(managed.join("gog-work")).unwrap().count(), 0);
+
+    let mut interrupted = installer_stream(addr, &http.token, "restart-installer", &input);
+    assert!(interrupted.any(|event| event["phase"] == "ExtractingInstaller"));
+    drop(server);
+    drop(interrupted);
+    let _restarted = start(dir.path(), addr);
+    let result = installer_stream(addr, &http.token, "restart-installer", &input)
+        .last()
+        .unwrap();
+    assert_eq!(result["phase"], "Completed", "{result}");
+    let saved = result["result"].clone();
+    let association = saved["associationId"].as_str().unwrap();
+    let manifest = http
+        .json(
+            "GET",
+            &format!("/associations/{association}/declarations"),
+            &[],
+            None,
+            200,
+        )
+        .0;
+    assert_eq!(
+        manifest["data"]["appDepot"]["gogOfflineInstaller"]["user"]["gameVersion"],
+        "fixture-1"
+    );
+    assert_eq!(
+        http.json("GET", &format!("/releases/{release}"), &[], None, 200)
+            .0["state"],
+        "Draft"
+    );
+    let replay = installer_stream(addr, &http.token, "restart-installer", &input)
+        .last()
+        .unwrap();
+    assert_eq!(replay["result"], saved);
+    for entry in fs::read_dir(fixtures.join("multi")).unwrap() {
+        let entry = entry.unwrap();
+        assert_eq!(
+            fs::read(source.join(entry.file_name())).unwrap(),
+            fs::read(entry.path()).unwrap()
+        );
+    }
+}

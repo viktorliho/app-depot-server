@@ -1,6 +1,6 @@
 # Reliable upload, commit and recovery
 
-This contract covers bare files, inventory-first bare trees, explicitly imported ZIPs and the same ingestion modes fed from approved Server-side import roots. It does not change [Tree Identity v1](tree-identity.md), publication, authorization or whole-file CAS identity. Upload and registration do not publish a Release. The Server never executes content.
+This contract covers bare files, inventory-first bare trees, explicitly imported ZIPs and ingestion from approved Server-side import roots, including supported GOG offline installers. It does not change [Tree Identity v1](tree-identity.md), publication, authorization or whole-file CAS identity. Upload and registration do not publish a Release. The Server never executes content.
 
 ## Session and progress
 
@@ -25,6 +25,8 @@ Only a complete file enters verification. Independently stream its exact bytes t
 On a staged file mismatch, the terminal result identifies the original logical file path and whether size or SHA-256 failed, only to the authorized session principal. A structured Server log identifies the session, operation, opaque file ID and verification phase without recording the logical path, physical staging/CAS path, content or expected/observed digest. An incomplete range remains a separate recoverable receipt problem. A mismatch never causes the Server to substitute an observed digest or register the Artifact; starting again after source inspection requires a new session and operation key.
 
 For explicit ZIP import, verify the complete transport ZIP's received bytes and structure, then parse only supported Store/Deflate members under quotas and path/type rules. Extract into isolated staging with bounded resources, verify each extracted file, and build the canonical logical tree under [Tree Identity v1](tree-identity.md). The temporary ZIP is never registered as an additional Artifact. A crash before registration discards or reconciles incomplete extraction and restarts import from a still complete, verified ZIP; decompression checkpoints are unnecessary. If power loss damages or removes that ZIP, invalidate its ranges for retransmission or fail the session safely.
+
+For [GOG Offline Installer](gog-offline-import.md), independently verify a reviewed offline installer, extract it in the restricted Server Storage worker, and feed the checked output to the BareTree session pipeline. The recovered payload and initial association declaration commit together. Exact retries can reconstruct extraction staging and resume the existing session. Incomplete private extraction staging is discarded on restart.
 
 ## CAS and catalog commit
 

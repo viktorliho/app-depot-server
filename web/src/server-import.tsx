@@ -1,16 +1,24 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { useOutletContext, useParams } from 'react-router'
-import { apiRequest, idempotencyKey, resource, type DepotApp, type FinalizationResult, type Release } from './api'
+import { apiRequest, idempotencyKey, jsonBody, resource, type DepotApp, type FinalizationResult, type Release } from './api'
 import { ActionLink, LoadingState, ProblemNotice } from './components'
 import { useAuth } from './portal'
 import { useResource } from './use-resource'
-import type { IngestionMode, IngestionTarget } from './ingestion'
+import type { ServerIngestionMode, IngestionTarget } from './ingestion'
 
 type Root = { id: string; displayName: string; kind: 'Inbox' | 'Configured' }
 type Entry = { name: string; entryType: 'File' | 'Directory'; size: number | null }
 type Page = { items: Entry[]; nextCursor: string | null }
 type Progress = { phase: string; sessionId?: string; filesTotal?: number; filesProcessed?: number;
   bytesTotal?: number; bytesProcessed?: number; result?: FinalizationResult; problem?: { code: string; title: string } }
+type Analysis = { setup: string; productName: string; installerVersion: string; installerFormat: string;
+  gogGameId: string | null; engine: string; engineVersion: string;
+  volumes: { name: string; size: number; sha256: string }[]; installerLanguages: string[];
+  languageTaggedFiles: Record<string, number>; redistributableRoots: string[]; candidateExecutables: string[];
+  listedFileCount: number; approximateOutputBytes: number | null; unknownActions: string[] }
+type AnalysisResult = { candidates: string[]; analysis: Analysis | null; analysisId: string | null }
+type ReviewHints = { productName: string; gameVersion: string; candidateExecutable: string; notes: string }
+const emptyHints: ReviewHints = { productName: '', gameVersion: '', candidateExecutable: '', notes: '' }
 const enc = encodeURIComponent
 function bytes(value: number | null) {
   if (value === null) return 'Directory'
@@ -26,7 +34,7 @@ function storedKey(fingerprint: string) {
   return key
 }
 
-export function ServerImportPage({ target, mode, onBusyChange }: { target: IngestionTarget; mode: IngestionMode; onBusyChange: (busy: boolean) => void }) {
+export function ServerImportPage({ target, mode, onBusyChange }: { target: IngestionTarget; mode: ServerIngestionMode; onBusyChange: (busy: boolean) => void }) {
   const app = useOutletContext<DepotApp | undefined>()
   const { releaseId } = useParams()
   const { state } = useAuth()
@@ -44,6 +52,12 @@ export function ServerImportPage({ target, mode, onBusyChange }: { target: Inges
   const [loading, setLoading] = useState(false)
   const [browseError, setBrowseError] = useState<unknown>()
   const [selected, setSelected] = useState<{ path: string; type: Entry['entryType']; size: number | null } | null>(null)
+  const gog = mode === 'GogOfflineInstaller'
+  const directory = mode === 'BareTree' || gog
+  const [analysis, setAnalysis] = useState<AnalysisResult>()
+  const [analyzing, setAnalyzing] = useState(false)
+  const [setup, setSetup] = useState('')
+  const [hints, setHints] = useState(emptyHints)
   const [name, setName] = useState('')
   const [progress, setProgress] = useState<Progress | null>(null)
   const [error, setError] = useState<unknown>()
@@ -56,7 +70,7 @@ export function ServerImportPage({ target, mode, onBusyChange }: { target: Inges
   const controller = useRef<AbortController | null>(null)
   const keyRef = useRef<{ fingerprint: string; key: string } | null>(null)
   const availableRoots = roots.value?.items || []
-  useEffect(() => { onBusyChange(busy) }, [busy, onBusyChange])
+  useEffect(() => { onBusyChange(busy || analyzing) }, [busy, analyzing, onBusyChange])
   useEffect(() => {
     if (availableRoots.length && !availableRoots.some(root => root.id === rootId)) setRootId(availableRoots.find(root => root.id === 'inbox')?.id || availableRoots[0].id)
   }, [availableRoots, rootId])
@@ -74,18 +88,37 @@ export function ServerImportPage({ target, mode, onBusyChange }: { target: Inges
   useEffect(() => () => controller.current?.abort(), [])
   const targetValue = useMemo(() => target === 'release' ? { releaseId } : target === 'app'
     ? { appId: app?.id, createRelease: true } : { newAppName: name.trim() }, [target, releaseId, app?.id, name])
-  function navigateDirectory(next: string) { setPath(next); setCursor(''); setPreviousCursors([]); setSelected(null) }
+  function navigateDirectory(next: string) { setPath(next); setCursor(''); setPreviousCursors([]); setSelected(null); setAnalysis(undefined); setSetup(''); setHints(emptyHints) }
   function choose(entry: Entry) {
     const chosen = path ? `${path}/${entry.name}` : entry.name
     if (entry.entryType === 'Directory') navigateDirectory(chosen)
-    else if (mode !== 'BareTree') setSelected({ path: chosen, type: 'File', size: entry.size })
+    else if (!directory) setSelected({ path: chosen, type: 'File', size: entry.size })
+  }
+  async function analyze() {
+    if (!selected || !gog || analyzing) return
+    const abort = new AbortController()
+    controller.current = abort
+    setAnalyzing(true); setError(undefined); setMessage(''); setProgress(null)
+    try {
+      const { value } = await apiRequest<AnalysisResult>('/server-imports/gog/analysis', {
+        method: 'POST', authenticated: true, csrf: state.session!.csrfToken, signal: abort.signal,
+        ...jsonBody({ rootId, path: selected.path, setup: setup || undefined }),
+      })
+      setAnalysis(value)
+      if (value.analysis && target === 'new-app') setName(current => current || value.analysis!.productName)
+    } catch (problem) {
+      if (abort.signal.aborted) setMessage('Analysis cancelled.')
+      else setError(problem)
+      setAnalysis(undefined)
+    } finally { setAnalyzing(false); controller.current = null }
   }
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!selected || !rootId || !user || !canManage || (mode === 'BareTree') !== (selected.type === 'Directory')) return
-    const publish = (event.nativeEvent as SubmitEvent).submitter instanceof HTMLButtonElement &&
+    if (!selected || !rootId || !user || !canManage || directory !== (selected.type === 'Directory') || (gog && !analysis?.analysisId)) return
+    const publish = !gog && (event.nativeEvent as SubmitEvent).submitter instanceof HTMLButtonElement &&
       (event.nativeEvent as SubmitEvent).submitter?.getAttribute('value') === 'publish'
-    const request = { rootId, path: selected.path, mode, target: targetValue }
+    const request = { rootId, path: selected.path, mode, target: targetValue,
+      gogReview: gog && analysis?.analysis ? { setup: analysis.analysis.setup, analysisId: analysis.analysisId, hints } : undefined }
     const fingerprint = JSON.stringify(request)
     const key = keyRef.current?.fingerprint === fingerprint ? keyRef.current.key : storedKey(fingerprint)
     keyRef.current = { fingerprint, key }
@@ -147,6 +180,7 @@ export function ServerImportPage({ target, mode, onBusyChange }: { target: Inges
       keyRef.current = null
     } catch (failure) {
       if (newAttemptRequired) {
+        if (gog && !cancellationRequested.current) setAnalysis(undefined)
         try { sessionStorage.removeItem('app-depot-server-import') } catch { /* Browser storage is optional. */ }
         keyRef.current = null
         setMessage('The previous attempt cannot be resumed. Stabilize the source, then start a new import.')
@@ -160,6 +194,7 @@ export function ServerImportPage({ target, mode, onBusyChange }: { target: Inges
     } finally { setBusy(false); controller.current = null }
   }
   async function cancel() {
+    if (analyzing) { controller.current?.abort(); return }
     const requestKey = keyRef.current?.key
     if (!requestKey) return
     try {
@@ -181,7 +216,8 @@ export function ServerImportPage({ target, mode, onBusyChange }: { target: Inges
     } catch (failure) { setError(failure) }
   }
   return <>
-    {!canManage ? <ProblemNotice error={new Error('You do not have permission to import to this target.')} />
+    {app?.kind === 'derived' ? <ProblemNotice error={new Error('Configure this Derived release in its recipe editor.')} />
+      : !canManage ? <ProblemNotice error={new Error('You do not have permission to import to this target.')} />
       : target === 'release' && release.loading ? <LoadingState />
       : target === 'release' && release.error ? <ProblemNotice error={release.error} retry={release.retry} />
       : target === 'release' && (release.value?.state !== 'Draft' || release.value.appId !== app?.id) ? <ProblemNotice error={new Error('Select a Draft release in this application to import content.')} />
@@ -192,16 +228,16 @@ export function ServerImportPage({ target, mode, onBusyChange }: { target: Inges
         <h2>Content from server storage</h2><p>Select an approved read-only source. App Depot copies and verifies its bytes into managed storage.</p>
         <form className="form-stack" onSubmit={submit}>
           {target === 'new-app' && <label>App name<input value={name} disabled={busy} onChange={event => setName(event.target.value)} required /></label>}
-          <label>Import root<select value={rootId} disabled={busy} onChange={event => { setRootId(event.target.value); navigateDirectory('') }}>
+          <label>Import root<select value={rootId} disabled={busy || analyzing} onChange={event => { setRootId(event.target.value); navigateDirectory('') }}>
             {availableRoots.map(root => <option key={root.id} value={root.id}>{root.displayName}</option>)}</select></label>
           <div className="form-actions">
-            <button type="button" className="button button-secondary" disabled={busy || !path} onClick={() => navigateDirectory(path.split('/').slice(0, -1).join('/'))}>Up one directory</button>
+            <button type="button" className="button button-secondary" disabled={busy || analyzing || !path} onClick={() => navigateDirectory(path.split('/').slice(0, -1).join('/'))}>Up one directory</button>
             <span>Location: /{path || ''}</span>
-            {mode === 'BareTree' && <button type="button" className="button button-secondary" disabled={busy} onClick={() => setSelected({ path, type: 'Directory', size: null })}>Select this directory</button>}
+            {directory && <button type="button" className="button button-secondary" disabled={busy || analyzing} onClick={() => { setSelected({ path, type: 'Directory', size: null }); setAnalysis(undefined); setSetup(''); setHints(emptyHints) }}>Select this directory</button>}
           </div>
           {loading ? <LoadingState label="Reading source directory…" /> : browseError ? <ProblemNotice error={browseError} /> :
             <table><thead><tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Size</th></tr></thead><tbody>
-              {page?.items.map(entry => <tr key={entry.name}><td><button type="button" className="link-button" disabled={busy || (mode === 'BareTree' && entry.entryType === 'File')} onClick={() => choose(entry)}>{entry.name}</button></td><td>{entry.entryType}</td><td>{bytes(entry.size)}</td></tr>)}
+              {page?.items.map(entry => <tr key={entry.name}><td><button type="button" className="link-button" disabled={busy || analyzing || (directory && entry.entryType === 'File')} onClick={() => choose(entry)}>{entry.name}</button></td><td>{entry.entryType}</td><td>{bytes(entry.size)}</td></tr>)}
             </tbody></table>}
           {!loading && !page?.items.length && <p>This directory is empty.</p>}
           {(previousCursors.length > 0 || page?.nextCursor) && <div className="form-actions">
@@ -216,11 +252,19 @@ export function ServerImportPage({ target, mode, onBusyChange }: { target: Inges
           {selected && <p role="status">Selected {selected.type.toLowerCase()}: {selected.path || '/'} · {bytes(selected.size)}</p>}
           <p className="subtle">The Server never modifies the source. Importing ZIP contents is an explicit choice. Registration creates a Draft release; publication is separate.</p>
           {rootId === 'inbox' && <p className="subtle">App Depot Inbox is a persistent landing area outside managed CAS. Place files there using the host filesystem or an operator-configured share. The import browser is read-only.</p>}
-          <div className="form-actions"><button className="button button-secondary" value="draft" disabled={busy || !!result || !selected || (target === 'new-app' && !name.trim())}>Import and save Draft</button>
-            {canCreate && <button className="button button-primary" value="publish" disabled={busy || !!result || !selected || (target === 'new-app' && !name.trim())}>Import and publish</button>}
-            {busy && <button type="button" className="button button-danger" onClick={() => void cancel()}>Cancel import</button>}</div>
+          {gog && selected && <>
+            {analysis && analysis.candidates.length > 1 && <label>Setup executable<select value={setup} disabled={busy || analyzing} onChange={event => { setSetup(event.target.value); setAnalysis({ ...analysis, analysis: null, analysisId: null }) }}>
+              <option value="">Choose an executable</option>{analysis.candidates.map(candidate => <option key={candidate}>{candidate}</option>)}
+            </select></label>}
+            <button type="button" className="button button-secondary" disabled={busy || analyzing || (analysis !== undefined && analysis.candidates.length > 1 && !setup)} onClick={() => void analyze()}>Analyze installer</button>
+            {analyzing && <><p role="status">Checking installer metadata and verifying data volumes…</p><progress aria-label="Installer analysis in progress" /></>}
+            {analysis?.analysis && <InstallerReview report={analysis.analysis} hints={hints} change={setHints} busy={busy || analyzing} />}
+          </>}
+          <div className="form-actions"><button className="button button-secondary" value="draft" disabled={busy || analyzing || !!result || !selected || (gog && !analysis?.analysisId) || (target === 'new-app' && !name.trim())}>Import and save Draft</button>
+            {canCreate && !gog && <button className="button button-primary" value="publish" disabled={busy || !!result || !selected || (target === 'new-app' && !name.trim())}>Import and publish</button>}
+            {(busy || analyzing) && <button type="button" className="button button-danger" onClick={() => void cancel()}>{analyzing ? 'Cancel analysis' : 'Cancel import'}</button>}</div>
         </form>
-        {progress && <section className="upload-status" aria-label="Import progress"><h2>{progress.phase === 'Receiving' ? 'Copying source bytes' : progress.phase === 'Importing' ? 'Extracting ZIP' : progress.phase === 'Committing' ? 'CAS registration' : progress.phase}</h2>
+        {progress && <section className="upload-status" aria-label="Import progress"><h2>{progress.phase === 'Receiving' ? 'Copying source bytes' : progress.phase === 'ExtractingInstaller' ? 'Extracting and verifying installer' : progress.phase === 'Importing' ? 'Extracting ZIP' : progress.phase === 'Committing' ? 'CAS registration' : progress.phase}</h2>
           {progress.phase === 'Completed' ? <p>Artifact registration completed. {published ? 'The Release is Published.' : 'The Release remains Draft until you publish it.'} The original source remains untouched; removing it later will not remove the registered Artifact. Deleting the App also leaves Inbox content unchanged.</p>
             : progress.phase === 'Failed' ? <p>{result ? 'Artifact registration completed, but publication failed. The Release remains Draft.' : 'Import failed. No incomplete content was registered as an Artifact.'}</p>
             : progress.phase === 'Cancelled' ? <p>Import cancelled. No incomplete content was registered as an Artifact.</p>
@@ -234,4 +278,34 @@ export function ServerImportPage({ target, mode, onBusyChange }: { target: Inges
         {result?.appId && <div className="form-actions section-action"><ActionLink to={`/apps/${result.appId}`} secondary>Open application</ActionLink><ActionLink to={`/apps/${result.appId}/releases/${result.releaseId}`} secondary>Open release</ActionLink></div>}
       </section>}
   </>
+}
+
+function InstallerReview({ report, hints, change, busy }: {
+  report: Analysis; hints: ReviewHints; change: (value: ReviewHints) => void; busy: boolean
+}) {
+  return <fieldset className="form-stack" disabled={busy}>
+    <legend>Installer review</legend>
+    <dl className="facts">
+      <div><dt>Product</dt><dd>{report.productName}</dd></div>
+      <div><dt>Setup</dt><dd>{report.setup}</dd></div>
+      <div><dt>Format</dt><dd>{report.installerFormat} {report.installerVersion}</dd></div>
+      <div><dt>Backend</dt><dd>{report.engine} {report.engineVersion}</dd></div>
+      <div><dt>Payload</dt><dd>{report.listedFileCount.toLocaleString()} listed files{report.approximateOutputBytes === null ? '' : ` · approximately ${bytes(report.approximateOutputBytes)}`}</dd></div>
+      <div><dt>Installer languages</dt><dd>{report.installerLanguages.join(', ') || 'Unknown'}</dd></div>
+      <div><dt>Language-tagged files</dt><dd>{Object.entries(report.languageTaggedFiles).map(([language, count]) => `${language} (${count})`).join(', ') || 'None reported'}</dd></div>
+      <div><dt>Redistributable directories</dt><dd>{report.redistributableRoots.join(', ') || 'None detected by path'}</dd></div>
+      <div><dt>Optional component relationships</dt><dd>Unknown</dd></div>
+    </dl>
+    <details><summary>Source volumes and unresolved setup actions</summary>
+      <ul>{report.volumes.map(volume => <li key={volume.name}>{volume.name} · {bytes(volume.size)}</li>)}</ul>
+      <ul>{report.unknownActions.map(action => <li key={action}>{action}</li>)}</ul>
+    </details>
+    <p>All recovered files will be kept together as a Tree Artifact. Installation readiness is unknown.</p>
+    <label>Product name override<input value={hints.productName} maxLength={255} onChange={event => change({ ...hints, productName: event.target.value })} /></label>
+    <label>Game version (optional)<input value={hints.gameVersion} maxLength={255} onChange={event => change({ ...hints, gameVersion: event.target.value })} /></label>
+    <label>Candidate launch file<select value={hints.candidateExecutable} onChange={event => change({ ...hints, candidateExecutable: event.target.value })}>
+      <option value="">Leave unspecified</option>{report.candidateExecutables.map(path => <option key={path}>{path}</option>)}
+    </select></label>
+    <label>Installation notes<input value={hints.notes} maxLength={4096} onChange={event => change({ ...hints, notes: event.target.value })} /></label>
+  </fieldset>
 }

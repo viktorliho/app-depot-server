@@ -100,6 +100,21 @@ impl AuthState {
         hex::encode(mac.finalize().into_bytes())
     }
 
+    pub(crate) fn sign_import_analysis(&self, input: &str) -> String {
+        self.mac("gog-analysis-v1:", input)
+    }
+
+    pub(crate) fn verify_import_analysis(&self, input: &str, signature: &str) -> bool {
+        let Ok(bytes) = hex::decode(signature) else {
+            return false;
+        };
+        let mut mac =
+            HmacSha256::new_from_slice(&self.signing_key).expect("HMAC accepts any key size");
+        mac.update(b"gog-analysis-v1:");
+        mac.update(input.as_bytes());
+        mac.verify_slice(&bytes).is_ok()
+    }
+
     fn signed_cookie(&self, id: &str) -> String {
         format!("{id}.{}", self.mac("cookie:", id))
     }
@@ -326,6 +341,15 @@ impl From<UploadError> for ApiError {
 }
 
 impl ApiError {
+    pub(crate) fn problem(status: StatusCode, code: &'static str, title: &'static str) -> Self {
+        Self {
+            status,
+            code,
+            title,
+            cancellation_reason: None,
+        }
+    }
+
     fn unauthenticated() -> Self {
         Self {
             status: StatusCode::UNAUTHORIZED,

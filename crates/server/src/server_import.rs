@@ -1,5 +1,6 @@
 use crate::{
     auth::{authorize, ApiError, AuthState},
+    gog,
     import_source::{ImportRoot, Scan, SourceFile, SourcePage},
 };
 use app_depot_application::{
@@ -44,6 +45,8 @@ pub struct ImportState {
     pub inbox_path: PathBuf,
     pub active: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     pub permits: Arc<Semaphore>,
+    pub gog_permit: Arc<Semaphore>,
+    pub gog_scratch: Arc<PathBuf>,
 }
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -53,6 +56,95 @@ pub struct ImportRequest {
     path: String,
     mode: String,
     target: Target,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    gog_review: Option<GogReview>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GogReview {
+    setup: String,
+    analysis_id: String,
+    #[serde(default)]
+    hints: gog::Hints,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AnalysisRequest {
+    root_id: String,
+    path: String,
+    setup: Option<String>,
+}
+
+struct CancelOnDrop(Arc<AtomicBool>);
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
+
+fn gog_error(error: gog::Error) -> ApiError {
+    let (code, title) = error.problem();
+    let status = match error {
+        gog::Error::Environment => StatusCode::SERVICE_UNAVAILABLE,
+        gog::Error::Changed => StatusCode::CONFLICT,
+        _ => StatusCode::UNPROCESSABLE_ENTITY,
+    };
+    ApiError::problem(status, code, title)
+}
+
+fn review_binding(
+    principal: &Principal,
+    root: &ImportRoot,
+    path: &str,
+    report: &gog::Analysis,
+) -> String {
+    serde_json::json!([principal.id, root.id, path, gog::analysis_id(report)]).to_string()
+}
+
+async fn analyze_gog(
+    State(state): State<ImportState>,
+    headers: HeaderMap,
+    Json(input): Json<AnalysisRequest>,
+) -> Result<Response, ApiError> {
+    let principal = authorize(&state.auth, &headers, true).await?;
+    let root = root_for(&state, &input.root_id, &principal)?.clone();
+    let permit = state
+        .gog_permit
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| UploadError::OperationRunning)?;
+    let flag = Arc::new(AtomicBool::new(false));
+    let _cancel = CancelOnDrop(flag.clone());
+    let worker_key = format!("analysis:{}", uuid::Uuid::new_v4());
+    state
+        .active
+        .lock()
+        .unwrap()
+        .insert(worker_key.clone(), flag.clone());
+    let worker = ActiveGuard {
+        key: worker_key,
+        active: state.active.clone(),
+    };
+    let result = tokio::task::spawn_blocking(move || {
+        let _worker = worker;
+        let _permit = permit;
+        let candidates = gog::candidates(&root, &input.path)?;
+        let setup = match input.setup {
+            Some(setup) if candidates.contains(&setup) => setup,
+            Some(_) => return Err(gog::Error::Source),
+            None if candidates.len() == 1 => candidates[0].clone(),
+            None if candidates.is_empty() => return Err(gog::Error::Source),
+            None => return Ok(serde_json::json!({"candidates": candidates, "analysis": null, "analysisId": null})),
+        };
+        let (work, volumes) = gog::Work::prepare(&state.gog_scratch, &root, &input.path, &setup, &flag)?;
+        let (analysis, _) = work.inspect(setup, volumes, &flag, true)?;
+        let id = state.auth.sign_import_analysis(&review_binding(&principal, &root, &input.path, &analysis));
+        Ok(serde_json::json!({"candidates": candidates, "analysis": analysis, "analysisId": id}))
+    }).await.map_err(|_| ApiError::server())?.map_err(gog_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(result)).into_response())
 }
 
 #[derive(Serialize)]
@@ -249,14 +341,25 @@ async fn start(
         .filter(|v| !v.is_empty() && v.len() <= 255)
         .ok_or(UploadError::Invalid)?
         .to_owned();
-    if !matches!(input.mode.as_str(), "BareFile" | "BareTree" | "ZipImport") {
+    if !matches!(
+        input.mode.as_str(),
+        "BareFile" | "BareTree" | "ZipImport" | "GogOfflineInstaller"
+    ) {
         return Err(UploadError::UnsupportedKind.into());
+    }
+    match (input.mode.as_str(), input.gog_review.as_ref()) {
+        ("GogOfflineInstaller", Some(review))
+            if review.analysis_id.len() == 64
+                && review.analysis_id.bytes().all(|b| b.is_ascii_hexdigit())
+                && review.hints.valid() => {}
+        ("GogOfflineInstaller", _) | (_, Some(_)) => return Err(UploadError::Invalid.into()),
+        _ => {}
     }
     let root = root_for(&state, &input.root_id, &principal)?.clone();
     // Validate source syntax before persisting the idempotency binding.
     if !input.path.is_empty() {
         app_depot_domain::tree::validate_path(&input.path).map_err(|_| UploadError::Invalid)?;
-    } else if input.mode != "BareTree" {
+    } else if !matches!(input.mode.as_str(), "BareTree" | "GogOfflineInstaller") {
         return Err(UploadError::Invalid.into());
     }
     let active_key = format!("{}:{key}", principal.id);
@@ -283,6 +386,7 @@ async fn start(
                 UploadError::SessionCancelled => ("session_cancelled", "Import cancelled."),
                 UploadError::NotFound => ("source_unavailable", "The selected source is no longer available."),
                 UploadError::Invalid => ("invalid_source", "The source is invalid or contains an unsupported entry."),
+                UploadError::OperationRunning => ("operation_running", "An installer operation is already active. Retry when it finishes."),
                 UploadError::Incomplete => ("incomplete_transfer", "Source transfer is incomplete. Retry this import."),
                 UploadError::Retryable(_) => ("retryable_import_failure", "Temporary Server failure. Retry this import."),
                 _ => ("import_failed", "Server import failed. Check the source and retry or start a new import."),
@@ -393,26 +497,83 @@ async fn run_import(
         }
     }
     emit(tx, serde_json::json!({ "phase": "Scanning" })).await;
-    let scan_root = root.clone();
-    let path = input.path.clone();
-    let mode = input.mode.clone();
-    let scan_flag = cancelled.clone();
-    let scan =
-        tokio::task::spawn_blocking(move || scan_root.scan_with_cancel(&path, &mode, &scan_flag))
-            .await
-            .map_err(|_| UploadError::Retryable("source scan unavailable".into()))?
-            .map_err(|error| match error.kind() {
-                std::io::ErrorKind::Interrupted => UploadError::SessionCancelled,
-                std::io::ErrorKind::InvalidData => UploadError::ConflictingBytes,
-                _ => UploadError::Invalid,
-            })?;
+    let _staged;
+    let transfer_root;
+    let scan;
+    let manifest;
+    if let Some(review) = &input.gog_review {
+        let _permit = state
+            .gog_permit
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| UploadError::OperationRunning)?;
+        let scratch = state.gog_scratch.clone();
+        let source = root.clone();
+        let auth = state.auth.clone();
+        let reviewing_principal = principal.clone();
+        let path = input.path.clone();
+        let flag = cancelled.clone();
+        let review = review.clone();
+        emit(tx, serde_json::json!({"phase":"ExtractingInstaller"})).await;
+        let result = tokio::task::spawn_blocking(move || {
+            let (work, volumes) =
+                gog::Work::prepare(&scratch, &source, &path, &review.setup, &flag)?;
+            let (report, listed) = work.inspect(review.setup, volumes, &flag, false)?;
+            if !auth.verify_import_analysis(
+                &review_binding(&reviewing_principal, &source, &path, &report),
+                &review.analysis_id,
+            ) {
+                return Err(gog::Error::Changed);
+            }
+            let (root, scan) = work.extract(&report, &listed, &flag)?;
+            let manifest = gog::declaration(report, &review.hints, &scan)?;
+            Ok((work, root, scan, manifest))
+        })
+        .await
+        .map_err(|_| UploadError::Retryable("extractor worker unavailable".into()))?;
+        match result {
+            Ok((work, extracted, inventory, metadata)) => {
+                _staged = work;
+                transfer_root = extracted;
+                scan = inventory;
+                manifest = Some(metadata);
+            }
+            Err(error) => {
+                let (code, title) = error.problem();
+                emit(tx, serde_json::json!({ "phase": "Failed", "problem": { "code": code, "title": title } })).await;
+                return Ok(());
+            }
+        }
+    } else {
+        transfer_root = root.clone();
+        let scan_root = root.clone();
+        let path = input.path.clone();
+        let mode = input.mode.clone();
+        let scan_flag = cancelled.clone();
+        scan = tokio::task::spawn_blocking(move || {
+            scan_root.scan_with_cancel(&path, &mode, &scan_flag)
+        })
+        .await
+        .map_err(|_| UploadError::Retryable("source scan unavailable".into()))?
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::Interrupted => UploadError::SessionCancelled,
+            std::io::ErrorKind::InvalidData => UploadError::ConflictingBytes,
+            _ => UploadError::Invalid,
+        })?;
+        manifest = None;
+    }
     if cancelled.load(Ordering::Relaxed) {
         return Err(UploadError::SessionCancelled);
     }
+    let upload_mode = if manifest.is_some() {
+        "BareTree"
+    } else {
+        &input.mode
+    };
     let create = UploadCreate {
-        mode: input.mode.clone(),
+        mode: upload_mode.into(),
         target: input.target.clone(),
-        file: (input.mode != "BareTree").then(|| FileClaim {
+        file: (upload_mode != "BareTree").then(|| FileClaim {
             size: scan.files[0].size,
             sha256: scan.files[0].sha256.clone(),
         }),
@@ -427,6 +588,17 @@ async fn run_import(
     if updated.rows_affected() != 1 {
         return Err(UploadError::IdempotencyConflict);
     }
+    if let Some(manifest) = &manifest {
+        if session.phase == "Receiving" {
+            app_depot_infrastructure::upload::bind_import_declaration(
+                &state.auth.pool,
+                principal,
+                &session.id,
+                manifest,
+            )
+            .await?;
+        }
+    }
     emit(tx, serde_json::json!({ "phase": "Receiving", "sessionId": session.id, "filesTotal": scan.files.len(), "bytesTotal": scan.total_bytes, "filesProcessed": 0, "bytesProcessed": 0 })).await;
     if session.phase != "Receiving" {
         if let Some(result) = state.coordinator.result(principal, &session.id).await? {
@@ -435,7 +607,7 @@ async fn run_import(
         }
         return Err(UploadError::OperationRunning);
     }
-    let assigned = if input.mode == "BareTree" {
+    let assigned = if upload_mode == "BareTree" {
         prepare_inventory(state, principal, key, &session.id, &scan).await?
     } else {
         HashMap::from([(String::new(), session.file().file_id.clone())])
@@ -453,7 +625,16 @@ async fn run_import(
             files_done: index,
             bytes_before: bytes_done,
         };
-        transfer_file(state, root, principal, file_id, file, &progress, cancelled).await?;
+        transfer_file(
+            state,
+            &transfer_root,
+            principal,
+            file_id,
+            file,
+            &progress,
+            cancelled,
+        )
+        .await?;
         bytes_done += file.size;
         if index % 20 == 0 || index + 1 == scan.files.len() {
             progress.files_done = index + 1;
@@ -655,6 +836,7 @@ pub fn router(state: ImportState) -> Router {
         .route("/admin/import-sources", get(admin_sources))
         .route("/server-imports/roots", get(list_roots))
         .route("/server-imports/roots/{id}/entries", get(browse))
+        .route("/server-imports/gog/analysis", post(analyze_gog))
         .route("/server-imports", post(start).delete(cancel))
         .with_state(state)
 }

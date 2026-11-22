@@ -29,6 +29,43 @@ pub struct UploadAdapter {
     fail_deletion_cleanup: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
+pub async fn bind_import_declaration(
+    pool: &SqlitePool,
+    principal: &Principal,
+    session_id: &str,
+    data: &serde_json::Value,
+) -> Result<(), UploadError> {
+    let data = serde_json::to_string(data).map_err(retry)?;
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+    let state: Option<String> = sqlx::query_scalar(
+        "SELECT phase FROM upload_sessions WHERE id=? AND owner_id=? AND mode='BareTree'",
+    )
+    .bind(session_id)
+    .bind(&principal.id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(db)?;
+    if state.as_deref() != Some("Receiving") {
+        return Err(UploadError::OperationRunning);
+    }
+    sqlx::query("INSERT OR IGNORE INTO import_declarations(session_id, data_json) VALUES(?, ?)")
+        .bind(session_id)
+        .bind(&data)
+        .execute(&mut *tx)
+        .await
+        .map_err(db)?;
+    let stored: String =
+        sqlx::query_scalar("SELECT data_json FROM import_declarations WHERE session_id=?")
+            .bind(session_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db)?;
+    if stored != data {
+        return Err(UploadError::IdempotencyConflict);
+    }
+    tx.commit().await.map_err(db)
+}
+
 impl UploadAdapter {
     pub fn new(pool: SqlitePool, root: PathBuf) -> Self {
         Self {
@@ -611,6 +648,13 @@ impl UploadPort for UploadAdapter {
         Ok(value as u64)
     }
 
+    async fn tree_file_size(&self, id: &str, file_id: &str) -> Result<u64, UploadError> {
+        let size: Option<i64> = sqlx::query_scalar(
+            "SELECT size FROM upload_inventory WHERE session_id=? AND file_id=? AND entry_type='File'",
+        ).bind(id).bind(file_id).fetch_optional(&self.pool).await.map_err(db)?;
+        Ok(size.ok_or(UploadError::NotFound)? as u64)
+    }
+
     async fn receive(
         &self,
         id: &str,
@@ -746,9 +790,7 @@ impl UploadPort for UploadAdapter {
     async fn progress(&self, id: &str, file_id: &str) -> Result<UploadProgress, UploadError> {
         let session = self.stored(id).await?;
         let total_size = if session.public.mode == "BareTree" {
-            let size: Option<i64> = sqlx::query_scalar("SELECT size FROM upload_inventory WHERE session_id=? AND file_id=? AND entry_type='File'")
-                .bind(id).bind(file_id).fetch_optional(&self.pool).await.map_err(db)?;
-            size.ok_or(UploadError::NotFound)? as u64
+            self.tree_file_size(id, file_id).await?
         } else {
             if session.public.file().file_id != file_id {
                 return Err(UploadError::NotFound);
@@ -1183,6 +1225,18 @@ impl UploadPort for UploadAdapter {
         crate::catalog::create_initial_declaration(&mut tx, "Association", &association_id)
             .await
             .map_err(db)?;
+        if let Some(data) = sqlx::query_scalar::<_, String>(
+            "DELETE FROM import_declarations WHERE session_id=? RETURNING data_json",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(db)?
+        {
+            sqlx::query(
+                "UPDATE declaration_revisions SET data_json=? WHERE scope='Association' AND resource_id=?",
+            ).bind(data).bind(&association_id).execute(&mut *tx).await.map_err(db)?;
+        }
         let result = FinalizationResult {
             session_id: id.into(),
             operation_id: session.public.operation_id.clone(),

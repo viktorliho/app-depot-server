@@ -1,7 +1,7 @@
 import { chromium } from 'playwright-core'
 import { createHash, randomUUID } from 'node:crypto'
 import { execFileSync, spawn } from 'node:child_process'
-import { chmod, mkdir, mkdtemp, open, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { chmod, cp, mkdir, mkdtemp, open, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -115,6 +115,41 @@ async function verifyVisualRecipe(page, base, preview, treeAssociationId) {
   await editor.locator('.recipe-layout').getByText('assets/tree.txt', { exact: true }).waitFor()
   await editor.getByText('bin/source-port', { exact: true }).first().waitFor()
   if (await editor.getByRole('button', { name: 'Save and validate recipe' }).count()) throw new Error('Published recipe was editable')
+}
+
+async function verifyGogImporter(page, base, inbox, fixtures) {
+  await cp(join(fixtures, 'multi'), join(inbox, 'synthetic-gog'), { recursive: true })
+  await page.goto(`${base}artifacts/new-app`, { waitUntil: 'domcontentloaded' })
+  await page.getByLabel('Source').selectOption('server')
+  await page.getByLabel('Artifact type').selectOption('GogOfflineInstaller')
+  await page.getByRole('button', { name: 'synthetic-gog', exact: true }).click()
+  await page.getByRole('button', { name: 'Select this directory' }).click()
+  await page.getByRole('button', { name: 'Analyze installer' }).click()
+  const review = page.getByRole('group', { name: 'Installer review' })
+  await review.waitFor({ timeout: 20000 })
+  await review.getByText('InnoSetup 5.5.7', { exact: false }).waitFor()
+  await review.getByLabel('Game version (optional)').fill('fixture-v1')
+  await page.getByLabel('App name').fill('Synthetic GOG import')
+  if (await page.getByRole('button', { name: 'Import and publish', exact: true }).count()) throw new Error('Installer import offered automatic publication')
+  await page.getByRole('button', { name: 'Import and save Draft', exact: true }).click()
+  await page.getByText('Imported into a Draft release.', { exact: true }).waitFor({ timeout: 30000 })
+  await page.getByRole('link', { name: 'Open release', exact: true }).click()
+  await page.getByRole('button', { name: 'Publish release' }).waitFor()
+  const release = new URL(page.url()).pathname.split('/').pop()
+  const manifest = await page.evaluate(async id => {
+    const snapshot = await fetch(`/api/v1/releases/${id}/declaration-snapshot`).then(response => response.json())
+    return snapshot.associations[0]?.declaration.data.appDepot?.gogOfflineInstaller
+  }, release)
+  if (manifest?.payload.kind !== 'Tree' || manifest.analysis.volumes.length !== 3 ||
+      manifest.user.gameVersion !== 'fixture-v1' || manifest.installReadiness !== 'Unknown') {
+    throw new Error('GOG installation declaration is missing or inaccurate')
+  }
+  await page.getByRole('button', { name: 'Publish release' }).click()
+  await page.getByText('Release published. Artifact composition is now immutable.').waitFor()
+  if (createHash('sha256').update(await readFile(join(inbox, 'synthetic-gog/spanning-1b.bin'))).digest('hex') !==
+      createHash('sha256').update(await readFile(join(fixtures, 'multi/spanning-1b.bin'))).digest('hex')) {
+    throw new Error('GOG import modified an Inbox volume')
+  }
 }
 
 async function stopServer(child, label) {
@@ -1487,6 +1522,10 @@ try {
       return (await response.json()).items[0].artifactId
     }, httpReleaseId)
     if (httpIdentity !== serverFileIdentity) throw new Error('HTTP and Server import created different File Artifact identities for the same bytes')
+    if (process.env.GOG_TEST_FIXTURES) {
+      stage('analyzing, importing and publishing a synthetic multipart Inno installer')
+      await verifyGogImporter(page, base, inboxPath, process.env.GOG_TEST_FIXTURES)
+    }
     stage('checking import authorization, traversal and CSRF boundaries')
     const importBoundary = await page.evaluate(async () => {
       const invalidPath = await fetch('/api/v1/server-imports/roots/shared/entries?path=..%2Foutside')

@@ -30,6 +30,20 @@ mod config;
 mod declarations;
 mod diagnostics;
 mod download;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod extractor_sandbox;
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+mod extractor_sandbox {
+    pub fn configure(
+        _: &mut std::process::Command,
+        _: &std::path::Path,
+        _: &std::path::Path,
+        _: &std::path::Path,
+    ) -> std::io::Result<()> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+}
+mod gog;
 mod import_source;
 mod recipes;
 mod server_import;
@@ -237,6 +251,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             let import_sources = import_source::load_roots(&lock.path)?;
             let import_roots = Arc::new(import_sources.roots);
+            let gog_scratch = Arc::new(gog::cleanup(&lock.path)?);
+            let active_imports = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
             let download_state = download::DownloadState {
                 auth: auth_state.clone(),
                 root: Arc::new(lock.path.clone()),
@@ -279,8 +295,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     coordinator: coordinator.clone(),
                     roots: import_roots,
                     inbox_path: import_sources.inbox_path,
-                    active: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+                    active: active_imports.clone(),
                     permits: Arc::new(tokio::sync::Semaphore::new(2)),
+                    gog_permit: Arc::new(tokio::sync::Semaphore::new(1)),
+                    gog_scratch,
                 }))
                 .merge(channels::router(auth_state))
                 .merge(upload::router(upload_state))
@@ -384,6 +402,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 result = &mut server_task => { result??; }
                 _ = shutdown_signal() => {
                     ready_flag.store(false, Ordering::Release);
+                    for cancelled in active_imports.lock().unwrap().values() {
+                        cancelled.store(true, Ordering::Relaxed);
+                    }
                     let _ = worker_shutdown_tx.send(true);
                     let _ = shutdown_tx.send(());
                     match tokio::time::timeout(std::time::Duration::from_secs(30), &mut server_task).await {

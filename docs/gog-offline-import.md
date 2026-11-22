@@ -1,0 +1,44 @@
+# GOG Offline Installer import and installation declaration v1
+
+GOG Offline Installer is a Server Storage ingestion mode for supported unencrypted Inno Setup executables with embedded data or companion Inno disk slices. It uses the innoextract 1.9 CLI with known-version parsing, GOG Galaxy reconstruction when recognized by the backend, collision renaming and checksum checking. Older GOG distributions with external RAR archives require a separate backend. Unsupported formats, password-protected installers, missing or corrupt volumes and unsafe outputs fail before registration.
+
+The extraction product is one original Tree Artifact. It retains recovered game files, language variants, redistribution packages and setup resources together. The complete tree preserves Inno Setup's extractor-mapped paths, including directories such as `app`, `commonappdata` and `tmp` when present. These mappings do not imply the installation destinations of the original Windows setup. Multiple imports into a Draft Release can create independent associations through the regular catalog model.
+
+## Analysis and import
+
+Select a directory in the built-in Inbox or in an approved import root. The Server enumerates regular `.exe` candidates. One candidate is selected automatically. Multiple candidates require an explicit basename. The backend recognizes the executable by parsing Inno setup metadata. For the selected basename, the Server includes matching `.bin` and hyphen-suffixed `-*.bin` volumes. Standard Linux filename spelling applies. Other files in the source directory are ignored.
+
+Analysis copies the candidate set into private staging with SHA-256 and rechecks file identity, size, modification and change timestamps and companion names around the copy. The extractor parses the table, lists distinct output paths, and tests data checksums and volume availability without materializing the game. A corrupt or missing volume returns a structured error. A successful report has an empty `missingVolumes` list. Analysis describes its verified source snapshot and never creates a catalog resource. Browser progress is indeterminate and the caller can cancel the request.
+
+The Server signs the report's identity, including the original file hashes, with the authenticated principal and the selected logical root and directory. Import requires this `analysisId` and selected setup. It independently snapshots the chosen source again and validates the signature before extraction. A changed source requires a fresh analysis and request key. The snapshot protects extraction from later Inbox edits. The original files are opened read-only through the same no-follow source-root traversal as other Server imports.
+
+Extraction combines backend extraction and checksum testing and requires the resulting regular file paths to match the inspected list. Duplicate destination names use innoextract's `rename` mode to preserve alternative files. Original Windows timestamps and permissions are outside this contract. The Server checks the output paths, entries, sizes and SHA-256 before passing them to the ordinary BareTree upload coordinator. That coordinator verifies the staged files independently, creates CAS objects and registers the Artifact and its association atomically with the initial installation declaration. Retry with the same key uses the established import binding and acknowledged upload ranges or returns the completed registration. An incomplete extraction has no Artifact or Release. Completed registration creates or modifies a Draft Release, which can then be published explicitly.
+
+## Association declaration
+
+The initial declaration at `data.appDepot.gogOfflineInstaller` is `GogInstallationManifestV1`. It belongs to the association, so the context and annotations have independent history even when immutable Tree content is shared by multiple releases.
+
+| Field | Contract |
+| --- | --- |
+| `version` | Integer `1`. |
+| `analysis` | Parser and source evidence. This includes product name, Inno setup data version, optional GOG game ID, backend and version, original basenames, sizes, SHA-256 and detected volume signatures. Includes installer UI language tags, counts for language-tagged file destinations, recoverable file count and rounded size estimate where available. |
+| `analysis.optionalComponents` | Null. The v1 backend cannot reliably reconstruct optional component relationships and conditions. |
+| `analysis.unknownActions` | Categories which require investigation or explicit user input, including setup scripts, post-install actions, configuration, registry, prerequisite order and arguments. |
+| `detected` | Explicitly heuristic classification. The Windows family follows Inno Setup. Top-level `.exe` paths are candidates. Redistributable groups are path hints under `__redist`, `redist` and `_commonredist`. A directory grouping is evidence of preserved files. |
+| `user` | Optional publisher annotations from the review form. Empty strings represent an unspecified product-name override, game version, candidate executable and installation notes. An executable hint must point to a recovered file at import time. |
+| `payload` | The associated Tree, root-relative path convention, observed regular file count and exact total bytes. The association identifies the immutable Artifact. |
+| `installReadiness` | `Unknown`. |
+
+Analysis redistributable and executable candidates are selected using the same path heuristics as the `detected` summary. The counts of files carrying language tags and the installer UI languages provide evidence about localization. The backend does not interpret language selection code or guarantee that each tagged variant is separately installable. Game version remains a user annotation unless backed by separately verified evidence. Setup data version describes the package format.
+
+This manifest is descriptive and uses the ordinary editable declaration API. Servers and clients must treat declarations and downloaded payload as untrusted. A client can download and verify the Tree using the existing File/Tree API. Future installation clients must interpret configuration, language selection and prerequisite relationships with explicit user authority and validate paths and content on the target device. The Server runs only the Linux extraction backend. The import does not execute installers, prerequisites, scripts, Wine or Proton.
+
+## Isolation and operational limits
+
+The backend runs as a non-root Linux amd64 process. Landlock ABI 4 or later limits file access to the snapshot, an output directory and the extractor's runtime libraries. Seccomp bars sockets, subprocess creation and selected process and filesystem metadata operations. The original source and managed database and CAS are outside the extractor's access. Extraction enables no nested third-party archive helpers. The process has CPU, virtual memory, file size and descriptor limits. Server monitoring limits output bytes, entries and elapsed time. Child stdout and stderr are drained independently with bounded retention. Cancellation kills and reaps the child, while an abrupt Server exit triggers Linux parent-death handling. Startup removes stale private staging before serving requests. The normal upload operation tracks durable receipt, registration and cleanup.
+
+The Server allows one installer analyzer or extractor at a time. Limits are 128 selected inputs, 32 GiB of copied input, 48 GiB of extracted output, 16 GiB per output file, 100,000 output entries, 1,024 UTF-8 path bytes and 64 path components. The child has 600 CPU seconds and 1.5 GiB address space. Individual analysis commands can run up to 15 minutes, extraction up to 20 minutes. Output consumption is checked during execution and again before registration. When an estimate is available, the free-space preflight reserves headroom for extraction, upload staging and CAS promotion. Source copy checks for cancellation and a bounded input snapshot. An unavailable extractor or sandbox returns `gog_unavailable`. Other ingestion modes use their existing runtime requirements.
+
+If installer analysis fails, confirm that all original volumes share the selected setup's name and are complete, and retry on a supported Linux server with enough free space. After cancellation or a source change, perform a new analysis and use a new key. For a connection interruption with unchanged sources, retry the same import request and key. Large watched folders work best when the complete package has finished copying before analysis begins.
+
+The synthetic checks use pinned and hash-verified [innospect test packages](https://github.com/ATRAPSLLC/innospect/tree/2e286a43d30cc4a350e02cf45713552b771b56d4/tests/samples). The format and backend capabilities are documented by [innoextract](https://constexpr.org/innoextract/).
