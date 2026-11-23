@@ -15,6 +15,8 @@ pub enum CatalogError {
     Invalid,
     #[error("recipe: {0}")]
     Recipe(#[from] app_depot_domain::recipe::RecipeError),
+    #[error("installation: {0}")]
+    Installation(#[from] app_depot_domain::installation::InstallationError),
     #[error("invalid cursor")]
     InvalidCursor,
     #[error("forbidden")]

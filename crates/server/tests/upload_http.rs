@@ -2421,6 +2421,132 @@ impl RecipeHttp {
     }
 }
 
+fn exercise_standard_installation(
+    owner: &RecipeHttp,
+    reader: &RecipeHttp,
+    release: &str,
+    association: &Value,
+) -> (String, Value, Value) {
+    let path = format!("/releases/{release}/installation/resolve");
+    let doc = format!("/releases/{release}/declarations");
+    let install = json!({
+        "version":1,
+        "payload":[{"associationId":association,"source":"data","destination":"base"}],
+        "options":[
+            {"id":"language","name":"Game language","language":true,"required":true,"choices":[
+                {"id":"en","name":"English","payload":[]},
+                {"id":"fr","name":"French","payload":[{"associationId":association,"source":"data/resources.dat","destination":"text/fr.dat"}]}
+            ]},
+            {"id":"components","name":"Components","multiple":true,"choices":[
+                {"id":"bonus","name":"Bonus","payload":[{"associationId":association,"source":"data/resources.dat","destination":"bonus.dat"}]}
+            ]}
+        ],
+        "prerequisites":[
+            {"id":"first","name":"First","associationId":association,"path":"data/resources.dat","platforms":["windows/x86_64"],
+             "evidence":"synthetic fixture","arguments":["one argument"]},
+            {"id":"second","name":"Second","associationId":association,"path":"data/resources.dat","platforms":["windows/x86_64"],
+             "evidence":"synthetic fixture","optional":true,"when":{"optionId":"components","choiceId":"bonus"},"successExitCodes":[0,3]}
+        ],
+        "unresolved":["Unknown original installer action"]
+    });
+    let previous = response_etag(&owner.json("GET", &doc, &[], None, 200).1);
+    for (field, value, code) in [
+        ("destination", json!("../outside"), "installation_invalid"),
+        (
+            "associationId",
+            json!("00000000-0000-0000-0000-000000000001"),
+            "installation_source",
+        ),
+    ] {
+        let mut invalid = install.clone();
+        invalid["payload"][0][field] = value;
+        let problem = owner
+            .json(
+                "PUT",
+                &doc,
+                &[("If-Match", &previous)],
+                Some(json!({"data":{"appDepot":{"installation":invalid}}})),
+                422,
+            )
+            .0;
+        assert_eq!(problem["code"], code);
+    }
+    let data = json!({"data":{"appDepot":{"installation":install},"exampleExtension":true}});
+    let saved = owner.json(
+        "PUT",
+        &doc,
+        &[("If-Match", &previous)],
+        Some(data.clone()),
+        200,
+    );
+    owner.json("PUT", &doc, &[("If-Match", &previous)], Some(data), 412);
+    let missing = reader
+        .json(
+            "POST",
+            &path,
+            &[],
+            Some(json!({"platform":"windows/x86_64"})),
+            422,
+        )
+        .0;
+    assert_eq!(missing["code"], "installation_selection");
+    let choices = json!({"language":["fr"],"components":["bonus"]});
+    let request = json!({"platform":"windows/x86_64","revisionId":saved.0["revisionId"],"selections":choices});
+    let plan = reader
+        .json("POST", &path, &[], Some(request.clone()), 200)
+        .0;
+    assert_eq!(plan["revisionId"], saved.0["revisionId"]);
+    assert_eq!(plan["directories"], json!(["base", "base/empty", "text"]));
+    assert_eq!(plan["files"].as_object().unwrap().len(), 3);
+    assert_eq!(
+        plan["prerequisites"][0]["arguments"],
+        json!(["one argument"])
+    );
+    assert_eq!(plan["prerequisites"][1]["id"], "second");
+    assert_eq!(plan["prerequisites"][1]["successExitCodes"], json!([0, 3]));
+    assert_eq!(
+        plan["unresolved"],
+        json!(["Unknown original installer action"])
+    );
+    let mut collision = install.clone();
+    collision["payload"].as_array_mut().unwrap().push(json!({"associationId":association,"source":"data/resources.dat","destination":"base/resources.dat"}));
+    let preview = json!({"platform":"windows/x86_64","manifest":collision,"selections":choices});
+    reader.json("POST", &path, &[], Some(preview.clone()), 404);
+    assert_eq!(
+        owner.json("POST", &path, &[], Some(preview), 422).0["code"],
+        "installation_collision"
+    );
+
+    let mut single = install;
+    single["options"][0]["choices"] = json!([{"id":"en","name":"English","payload":[]}]);
+    single["options"][0]["defaults"] = json!(["en"]);
+    owner.json(
+        "PUT",
+        &doc,
+        &[("If-Match", &response_etag(&saved.1))],
+        Some(json!({"data":{"appDepot":{"installation":single}}})),
+        200,
+    );
+    let default_plan = reader
+        .json(
+            "POST",
+            &path,
+            &[],
+            Some(json!({"platform":"windows/x86_64"})),
+            200,
+        )
+        .0;
+    assert_eq!(default_plan["selections"]["language"], json!(["en"]));
+    assert_eq!(default_plan["prerequisites"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        reader
+            .json("POST", &path, &[], Some(request.clone()), 200)
+            .0,
+        plan
+    );
+    (path, request, plan)
+}
+
 #[tokio::test]
 async fn derived_recipe_lifecycle_resolves_synthetic_artifacts_and_preserves_permissions() {
     let dir = tempfile::tempdir().unwrap();
@@ -2479,6 +2605,12 @@ async fn derived_recipe_lifecycle_resolves_synthetic_artifacts_and_preserves_per
     let game_content = owner.upload_fixture(&game_release, b"synthetic game assets", true);
     owner.publish(&game_release, 200);
     owner.public(&game);
+    let (install_path, install_request, install_plan) = exercise_standard_installation(
+        &owner,
+        &reader,
+        &game_release,
+        &game_content["associationId"],
+    );
 
     let port = owner.create(
         "/apps",
@@ -2494,6 +2626,60 @@ async fn derived_recipe_lifecycle_resolves_synthetic_artifacts_and_preserves_per
     );
     let first_content = owner.upload_fixture(&first, b"first native fixture", false);
     owner.label_artifact(&first_content, "Native executable");
+    let file_association = &first_content["associationId"];
+    let launch_path = format!(
+        "/associations/{}/declarations",
+        file_association.as_str().unwrap()
+    );
+    let launch_tag = response_etag(&owner.json("GET", &launch_path, &[], None, 200).1);
+    let launch = owner.json("PUT",&launch_path,&[("If-Match",&launch_tag)],Some(json!({"data":{"appDepot":{
+        "label":"Native executable",
+        "entryPoints":[{"id":"start","platforms":["linux/x86_64"],"target":{"type":"ArtifactFile"},
+            "launch":{"method":"NativePortableV1","arguments":["--test"]}}]
+    }}})),200).0;
+
+    let declaration_path = format!("/releases/{first}/declarations");
+    let etag = response_etag(&owner.json("GET", &declaration_path, &[], None, 200).1);
+    owner.json(
+        "PUT",
+        &declaration_path,
+        &[("If-Match", &etag)],
+        Some(
+            json!({"data":{"appDepot":{"installation":{"version":1,"payload":[
+                {"associationId":file_association,"destination":"bin/port"}
+            ],"launch":{"associationId":file_association,"revisionId":launch["revisionId"],
+                "entryPointId":"start","destination":"bin/port"}}}}}),
+        ),
+        200,
+    );
+    let install_endpoint = format!("/releases/{first}/installation/resolve");
+    let file_install_request = json!({"platform":"linux/x86_64"});
+    let plan = owner
+        .json(
+            "POST",
+            &install_endpoint,
+            &[],
+            Some(file_install_request.clone()),
+            200,
+        )
+        .0;
+    assert_eq!(
+        plan["files"]["bin/port"]["artifactId"],
+        first_content["artifactId"]
+    );
+    assert_eq!(plan["files"]["bin/port"]["fileId"], Value::Null);
+    assert_eq!(plan["files"]["bin/port"]["executable"], true);
+    assert_eq!(plan["launch"]["path"], "bin/port");
+    assert_eq!(plan["launch"]["workingDirectory"], "bin");
+    assert_eq!(plan["launch"]["arguments"], json!(["--test"]));
+    reader.json(
+        "POST",
+        &install_endpoint,
+        &[],
+        Some(file_install_request),
+        404,
+    );
+
     owner.publish(&first, 200);
     let channel = format!("/apps/{port}/channels/stable");
     let channel_etag = response_etag(
@@ -2594,6 +2780,26 @@ async fn derived_recipe_lifecycle_resolves_synthetic_artifacts_and_preserves_per
         "stale_etag"
     );
     owner.publish(&release, 200);
+    let document = format!("/releases/{release}/declarations");
+    let etag = response_etag(&owner.json("GET", &document, &[], None, 200).1);
+    owner.json(
+        "PUT",
+        &document,
+        &[("If-Match", &etag)],
+        Some(json!({"data":{"appDepot":{"installation":{"version":1,"recipePayload":true}}}})),
+        200,
+    );
+    let installation = owner
+        .json(
+            "POST",
+            &format!("/releases/{release}/installation/resolve"),
+            &[],
+            Some(json!({"platform":"linux/x86_64"})),
+            200,
+        )
+        .0;
+    assert_eq!(installation["recipe"], owner.resolve(&release, 200));
+
     owner.public(&derived);
     assert_eq!(
         owner.save_recipe(&release, recipe.clone(), 409)["code"],
@@ -2745,6 +2951,12 @@ async fn derived_recipe_lifecycle_resolves_synthetic_artifacts_and_preserves_per
 
     drop(server);
     let _restarted = start(dir.path(), addr);
+    assert_eq!(
+        reader
+            .json("POST", &install_path, &[], Some(install_request), 200)
+            .0,
+        install_plan
+    );
     assert_eq!(owner.resolve(&top, 200), wrapped);
     assert_eq!(owner.json("GET", &root, &[], None, 200).0, stored);
     let second_path = format!("/releases/{second}");
@@ -3059,4 +3271,32 @@ async fn gog_import_recovers_from_interruption_rejects_changed_source_and_commit
         block["gogOfflineInstaller"]["user"]["candidateExecutable"],
         candidate
     );
+    let seed = http
+        .json(
+            "GET",
+            &format!("/releases/{candidate_release}/declarations"),
+            &[],
+            None,
+            200,
+        )
+        .0;
+    assert_eq!(
+        seed["data"]["appDepot"]["installation"]["payload"][0]["associationId"],
+        association
+    );
+    assert!(seed["data"]["appDepot"]["installation"]
+        .get("prerequisites")
+        .is_none());
+    let plan = http
+        .json(
+            "POST",
+            &format!("/releases/{candidate_release}/installation/resolve"),
+            &[],
+            Some(json!({"platform":"windows/x86_64"})),
+            200,
+        )
+        .0;
+    assert!(plan["prerequisites"].as_array().unwrap().is_empty());
+    assert_eq!(plan["selections"], json!({}));
+    assert_eq!(plan["launch"], Value::Null);
 }

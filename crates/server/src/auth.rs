@@ -157,6 +157,11 @@ impl From<CatalogError> for ApiError {
                 "invalid_request",
                 "Invalid request",
             ),
+            CatalogError::Installation(reason) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                reason.code(),
+                reason.title(),
+            ),
             CatalogError::Recipe(reason) => {
                 use app_depot_domain::recipe::RecipeError::*;
                 let code = match reason {

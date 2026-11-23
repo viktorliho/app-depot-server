@@ -98,7 +98,7 @@ function DependencyPolicy({ dependency, change, remove }: { dependency: Dependen
   </fieldset>
 }
 
-function TreePicker({ artifactId, choose }: { artifactId: string; choose: (path: string, file: boolean) => void }) {
+export function TreePicker({ artifactId, choose, filesOnly = false }: { artifactId: string; choose: (path: string, file: boolean) => void; filesOnly?: boolean }) {
   const [parent, setParent] = useState('')
   const [open, setOpen] = useState(false)
   const entries = usePage<InventoryEntry>(open ? `/artifacts/${enc(artifactId)}/inventory?parent=${enc(parent)}` : '')
@@ -107,7 +107,7 @@ function TreePicker({ artifactId, choose }: { artifactId: string; choose: (path:
     <p><strong>{parent || 'Artifact root'}</strong></p>
     <div className="form-actions">
       {parent && <button type="button" className="text-button" onClick={() => setParent(parent.split('/').slice(0, -1).join('/'))}>Parent directory</button>}
-      <button type="button" className="button button-secondary" onClick={() => choose(parent, false)}>{parent ? 'Use this directory' : 'Use entire tree'}</button>
+      {!filesOnly && <button type="button" className="button button-secondary" onClick={() => choose(parent, false)}>{parent ? 'Use this directory' : 'Use entire tree'}</button>}
     </div>
     {entries.error ? <ProblemNotice error={entries.error} retry={entries.retry} /> : entries.loading ? <LoadingState /> : <ul className="compact-list">
       {entries.value!.items.map(entry => <li key={entry.path}><button type="button" className="text-button" onClick={() => entry.type === 'Directory' ? setParent(entry.path) : choose(entry.path, true)}>

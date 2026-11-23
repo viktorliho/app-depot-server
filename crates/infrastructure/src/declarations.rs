@@ -80,7 +80,7 @@ pub async fn put(
     data: &Value,
 ) -> Result<(Document, i64), CatalogError> {
     let validator = if_match.ok_or(CatalogError::PreconditionRequired)?;
-    let mut tx = pool.begin().await?;
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let owner: Option<String> = match scope {
         "App" => sqlx::query_scalar("SELECT owner_id FROM apps WHERE id=?").bind(id).fetch_optional(&mut *tx).await?,
         "Release" => sqlx::query_scalar("SELECT a.owner_id FROM releases r JOIN apps a ON a.id=r.app_id WHERE r.id=?")
@@ -103,11 +103,13 @@ pub async fn put(
     if validator != etag("declarations", id, version) {
         return Err(CatalogError::StaleEtag);
     }
-    let revision_id = Uuid::new_v4().to_string();
-    sqlx::query("INSERT INTO declaration_revisions(id, scope, resource_id, data_json, created_at) VALUES(?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))")
-        .bind(&revision_id).bind(scope).bind(id).bind(serde_json::to_string(data)?).execute(&mut *tx).await?;
-    sqlx::query("UPDATE declaration_documents SET revision_id=?, etag_version=etag_version+1 WHERE scope=? AND resource_id=?")
-        .bind(&revision_id).bind(scope).bind(id).execute(&mut *tx).await?;
+    if scope == "Release" {
+        if let Some(value) = data.pointer("/appDepot/installation") {
+            let manifest = crate::installation::parse(value)?;
+            crate::installation::validate_references(&mut tx, id, &manifest).await?;
+        }
+    }
+    let revision_id = append(&mut tx, scope, id, data).await?;
     tx.commit().await?;
     Ok((
         Document {
@@ -116,6 +118,20 @@ pub async fn put(
         },
         version + 1,
     ))
+}
+
+pub(crate) async fn append(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    scope: &str,
+    id: &str,
+    data: &Value,
+) -> Result<String, CatalogError> {
+    let revision_id = Uuid::new_v4().to_string();
+    sqlx::query("INSERT INTO declaration_revisions(id, scope, resource_id, data_json, created_at) VALUES(?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))")
+        .bind(&revision_id).bind(scope).bind(id).bind(serde_json::to_string(data)?).execute(&mut **tx).await?;
+    sqlx::query("UPDATE declaration_documents SET revision_id=?, etag_version=etag_version+1 WHERE scope=? AND resource_id=?")
+        .bind(&revision_id).bind(scope).bind(id).execute(&mut **tx).await?;
+    Ok(revision_id)
 }
 
 pub async fn revisions(

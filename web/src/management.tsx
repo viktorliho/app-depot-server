@@ -1,3 +1,4 @@
+import { InstallationConfiguration } from './installation'
 import { depot, fileSize, GogInstallation, ReleaseLaunches, strings, text } from './release-information'
 import { RecipeSection } from './recipes'
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react'
@@ -251,6 +252,9 @@ export function ReleaseDetail() {
   const publishKey = useRef(idempotencyKey())
   const deleteKey = useRef(idempotencyKey())
   const snapshot = useResource(`snapshot:${releaseId}:${refresh}`, signal => apiRequest<DeclarationSnapshot>(`/releases/${releaseId}/declaration-snapshot`, { authenticated: true, signal }).then(result => result.value))
+  const previousSnapshot = useRef<DeclarationSnapshot | undefined>(undefined)
+  if (snapshot.value) previousSnapshot.current = snapshot.value
+  const installationSnapshot = snapshot.value || (previousSnapshot.current?.releaseId === releaseId ? previousSnapshot.current : undefined)
   const allowed = canManage(app, state.session!.user)
   const canPublish = state.session!.user.publishPermission || state.session!.user.serverAdmin
   const release = current.value?.value
@@ -307,6 +311,7 @@ export function ReleaseDetail() {
       {associations.value!.nextCursor && <button className="button button-secondary" onClick={() => setCursor(associations.value!.nextCursor!)}>Next Artifacts page</button>}
     </>}</section>}
     {snapshot.value && !derived && <><ReleaseLaunches snapshot={snapshot.value} path={path} editable={allowed} /><GogInstallation snapshot={snapshot.value} path={path} /></>}
+    {installationSnapshot && <InstallationConfiguration key={release!.id} releaseId={release!.id} derived={derived} editable={allowed} snapshot={installationSnapshot} onSaved={snapshot.retry} />}
     {snapshot.value && <section className="panel"><h2>Release notes and description</h2>
       {notes && <p className="release-prose">{notes}</p>}{description && <p className="release-prose">{description}</p>}
       {!notes && !description && <p>No notes or description provided.</p>}

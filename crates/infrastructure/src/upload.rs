@@ -1234,10 +1234,10 @@ impl UploadPort for UploadAdapter {
         .map_err(db)?
         {
             let metadata: serde_json::Value = serde_json::from_str(&data).map_err(retry)?;
+            let release = crate::declarations::document_in_tx(&mut tx, "Release", &release_id)
+                .await
+                .map_err(retry)?;
             if let Some(platform) = metadata.pointer("/appDepot/entryPoints/0/platforms/0") {
-                let release = crate::declarations::document_in_tx(&mut tx, "Release", &release_id)
-                    .await
-                    .map_err(retry)?;
                 if release
                     .data
                     .pointer("/appDepot/platforms")
@@ -1256,6 +1256,15 @@ impl UploadPort for UploadAdapter {
             sqlx::query(
                 "UPDATE declaration_revisions SET data_json=? WHERE scope='Association' AND resource_id=?",
             ).bind(data).bind(&association_id).execute(&mut *tx).await.map_err(db)?;
+            crate::installation::seed_gog(
+                &mut tx,
+                &release_id,
+                &association_id,
+                &metadata,
+                release.data,
+            )
+            .await
+            .map_err(retry)?;
         }
         let result = FinalizationResult {
             session_id: id.into(),

@@ -517,8 +517,33 @@ async fn snapshot(
     response(value, &validator)
 }
 
+async fn installation_resolve(
+    State(state): State<AuthState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(input): Json<app_depot_infrastructure::installation::Request>,
+) -> Result<impl IntoResponse, ApiError> {
+    let principal = if input.manifest.is_some() {
+        Some(authorize(&state, &headers, true).await?)
+    } else {
+        reader(&state, &headers).await?
+    };
+    let result = app_depot_infrastructure::installation::resolve(
+        &state.pool,
+        principal.as_ref(),
+        &id,
+        &input,
+    )
+    .await?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(result)))
+}
+
 pub fn router(state: AuthState) -> Router {
     Router::new()
+        .route(
+            "/releases/{id}/installation/resolve",
+            post(installation_resolve),
+        )
         .route(
             "/apps/{app_id}/declarations",
             get(app_current).put(app_replace),

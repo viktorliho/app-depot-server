@@ -146,6 +146,35 @@ async function verifyGogImporter(page, base, inbox, fixtures, preview) {
   }
   await page.getByRole('button', { name: 'Publish release' }).click()
   await page.getByText('Release published. Artifact composition is now immutable.').waitFor()
+  const legacyRelease = page.url()
+  const removed = await page.evaluate(async id => {
+    const path = `/api/v1/releases/${id}/declarations`
+    const session = await fetch('/api/v1/auth/sessions/current').then(response => response.json())
+    const current = await fetch(path)
+    const { data } = await current.json()
+    if (data.appDepot?.installation?.version !== 1 || data.appDepot.installation.options?.length || data.appDepot.installation.prerequisites?.length) throw new Error('Invalid GOG installation seed')
+    delete data.appDepot.installation
+    return (await fetch(path, { method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': session.csrfToken,
+      'If-Match': current.headers.get('ETag') }, body: JSON.stringify({ data }) })).status
+  }, release)
+  if (removed !== 200) throw new Error('Could not prepare legacy Published GOG fixture')
+  await page.goto(legacyRelease)
+  const install = page.getByRole('heading', { name: 'Installation Configuration' }).locator('..')
+  await install.getByText('Configure payload, choices and prerequisites', { exact: true }).click()
+  await install.getByRole('button', { name: 'Use recovered GOG payload' }).click()
+  await install.getByText('Language and component choices', { exact: true }).click()
+  await install.getByRole('button', { name: 'Add language choices' }).click()
+  await install.getByRole('button', { name: 'Add choice' }).click()
+  await install.getByLabel('Language identifier').fill('en')
+  await install.getByLabel('Choice name').fill('English')
+  await install.getByLabel('Default choice').check()
+  await install.getByText('Installation preview', { exact: true }).click()
+  await install.getByRole('button', { name: 'Validate and preview' }).click()
+  await install.getByText(/files · .* directories/).waitFor()
+  await install.getByRole('button', { name: 'Save installation configuration' }).click()
+  await install.getByText('Installation configuration saved as a new declaration revision.').waitFor()
+  const savedInstallation = await page.evaluate(async id => (await fetch(`/api/v1/releases/${id}/declarations`).then(response => response.json())).data.appDepot.installation, release)
+  if (savedInstallation.options?.[0]?.defaults?.[0] !== 'en') throw new Error('Legacy installation configuration was not saved')
   if (createHash('sha256').update(await readFile(join(inbox, 'synthetic-gog/spanning-1b.bin'))).digest('hex') !==
       createHash('sha256').update(await readFile(join(fixtures, 'multi/spanning-1b.bin'))).digest('hex')) {
     throw new Error('GOG import modified an Inbox volume')

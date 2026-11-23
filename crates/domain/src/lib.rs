@@ -1,3 +1,4 @@
+pub mod installation;
 pub mod recipe;
 
 /// A file identity is typed separately from a CAS digest.

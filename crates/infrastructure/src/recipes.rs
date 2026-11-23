@@ -31,18 +31,18 @@ struct LockedRelease {
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct File {
-    association_id: String,
-    artifact_id: String,
-    file_id: Option<String>,
-    sha256: String,
-    size: i64,
-    executable: bool,
+pub(crate) struct File {
+    pub(crate) association_id: String,
+    pub(crate) artifact_id: String,
+    pub(crate) file_id: Option<String>,
+    pub(crate) sha256: String,
+    pub(crate) size: i64,
+    pub(crate) executable: bool,
 }
 
 #[derive(Default)]
-struct Layout {
-    entries: BTreeMap<String, Option<File>>,
+pub(crate) struct Layout {
+    pub(crate) entries: BTreeMap<String, Option<File>>,
 }
 
 impl Layout {
@@ -78,7 +78,7 @@ impl Layout {
         Ok(())
     }
 
-    fn copy(&mut self, source: &Self, op: &Copy) -> Result<(), RecipeError> {
+    pub(crate) fn copy(&mut self, source: &Self, op: &Copy) -> Result<(), RecipeError> {
         if !op.source.is_empty() {
             match source.entries.get(&op.source) {
                 Some(Some(file)) => return self.copy_file(file.clone(), op),
@@ -111,7 +111,7 @@ impl Layout {
         Ok(())
     }
 
-    fn copy_file(&mut self, mut file: File, op: &Copy) -> Result<(), RecipeError> {
+    pub(crate) fn copy_file(&mut self, mut file: File, op: &Copy) -> Result<(), RecipeError> {
         file.executable |= op.executable;
         self.insert(op.destination.clone(), Some(file), op.collision)
     }
@@ -242,26 +242,24 @@ pub async fn lock(
     platform: &str,
 ) -> Result<Lock, CatalogError> {
     let mut tx = pool.begin().await?;
-    let anonymous = anonymous_enabled(&mut tx, actor).await?;
-    let root = release(&mut tx, id).await?.ok_or(CatalogError::NotFound)?;
+    lock_in_tx(&mut tx, actor, id, platform).await
+}
+
+pub(crate) async fn lock_in_tx(
+    conn: &mut SqliteConnection,
+    actor: Option<&Principal>,
+    id: &str,
+    platform: &str,
+) -> Result<Lock, CatalogError> {
+    let anonymous = anonymous_enabled(conn, actor).await?;
+    let root = release(conn, id).await?.ok_or(CatalogError::NotFound)?;
     if !root.derived
         || !may_read_catalog(actor, &root.owner, root.public && root.published, anonymous)
     {
         return Err(CatalogError::NotFound);
     }
-    let recipe = definition(&mut tx, id)
-        .await?
-        .ok_or(RecipeError::Required)?;
-    resolve(
-        &mut tx,
-        (actor, anonymous),
-        id,
-        &root,
-        &recipe,
-        platform,
-        true,
-    )
-    .await
+    let recipe = definition(conn, id).await?.ok_or(RecipeError::Required)?;
+    resolve(conn, (actor, anonymous), id, &root, &recipe, platform, true).await
 }
 
 #[derive(Serialize)]
@@ -561,45 +559,57 @@ impl Resolver<'_> {
             .expect("registered release")
             .artifacts
             .insert(id.clone(), artifact_id.clone());
-        if row.try_get::<&str, _>("kind")? == "File" {
-            return Ok(Source::File(File {
-                association_id: id,
-                artifact_id,
-                file_id: None,
-                sha256: row.try_get("digest")?,
-                size: row.try_get("size")?,
-                executable: false,
-            }));
+        let source = artifact_source(self.conn, row, id, artifact_id).await?;
+        if let Source::Tree(layout) = &source {
+            self.spend(layout.entries.len())?;
         }
-        let mut layout = Layout::default();
-        let rows = sqlx::query("SELECT path, file_id, sha256, size, executable FROM artifact_entries WHERE artifact_id=? ORDER BY path LIMIT ?")
-            .bind(&artifact_id).bind((MAX_ENTRIES + 1) as i64).fetch_all(&mut *self.conn).await?;
-        self.spend(rows.len())?;
-        if rows.len() > MAX_ENTRIES {
-            return Err(RecipeError::Limit.into());
-        }
-        for row in rows {
-            let sha256: Option<String> = row.try_get("sha256")?;
-            let file = if let Some(sha256) = sha256 {
-                Some(File {
-                    association_id: id.clone(),
-                    artifact_id: artifact_id.clone(),
-                    file_id: Some(row.try_get("file_id")?),
-                    sha256,
-                    size: row.try_get("size")?,
-                    executable: row.try_get("executable")?,
-                })
-            } else {
-                None
-            };
-            // Source Artifact paths follow Tree Identity v1. Validate only paths copied to the destination.
-            layout.entries.insert(row.try_get("path")?, file);
-        }
-        Ok(Source::Tree(layout))
+        Ok(source)
     }
 }
 
-enum Source {
+pub(crate) async fn artifact_source(
+    conn: &mut SqliteConnection,
+    row: &sqlx::sqlite::SqliteRow,
+    id: String,
+    artifact_id: String,
+) -> Result<Source, CatalogError> {
+    if row.try_get::<&str, _>("kind")? == "File" {
+        return Ok(Source::File(File {
+            association_id: id,
+            artifact_id,
+            file_id: None,
+            sha256: row.try_get("digest")?,
+            size: row.try_get("size")?,
+            executable: false,
+        }));
+    }
+    let mut layout = Layout::default();
+    let rows = sqlx::query("SELECT path, file_id, sha256, size, executable FROM artifact_entries WHERE artifact_id=? ORDER BY path LIMIT ?")
+            .bind(&artifact_id).bind((MAX_ENTRIES + 1) as i64).fetch_all(conn).await?;
+    if rows.len() > MAX_ENTRIES {
+        return Err(RecipeError::Limit.into());
+    }
+    for row in rows {
+        let sha256: Option<String> = row.try_get("sha256")?;
+        let file = if let Some(sha256) = sha256 {
+            Some(File {
+                association_id: id.clone(),
+                artifact_id: artifact_id.clone(),
+                file_id: Some(row.try_get("file_id")?),
+                sha256,
+                size: row.try_get("size")?,
+                executable: row.try_get("executable")?,
+            })
+        } else {
+            None
+        };
+        // Source Artifact paths follow Tree Identity v1. Validate only paths copied to the destination.
+        layout.entries.insert(row.try_get("path")?, file);
+    }
+    Ok(Source::Tree(layout))
+}
+
+pub(crate) enum Source {
     File(File),
     Tree(Layout),
 }
@@ -608,7 +618,7 @@ fn can_launch(platform: &str, file: &File) -> bool {
     platform.starts_with("windows/") || file.executable
 }
 
-fn windows_component(component: &str) -> bool {
+pub(crate) fn windows_component(component: &str) -> bool {
     let stem = component
         .split('.')
         .next()

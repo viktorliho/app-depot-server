@@ -19,6 +19,7 @@ pub mod backups;
 pub mod catalog;
 pub mod channels;
 pub mod declarations;
+pub mod installation;
 pub mod recipes;
 pub mod restore;
 pub mod upload;
