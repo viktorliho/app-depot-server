@@ -1,5 +1,6 @@
 import { useId, useRef, useState } from 'react'
-import { apiRequest, idempotencyKey, jsonBody, resource, type AppPage, type Association, type Channel, type DeclarationSnapshot, type DepotApp, type InventoryEntry, type Page, type Release } from './api'
+import { apiRequest, idempotencyKey, jsonBody, resource, type AppPage, type Association, type Channel, type DeclarationSnapshot, type DepotApp, type Page, type Release } from './api'
+import { ArtifactPicker, ResolvedTreePicker } from './artifact-browser'
 import { ArtworkThumbnail } from './artwork'
 import { LoadingState, ProblemNotice } from './components'
 import { useAuth } from './portal'
@@ -19,7 +20,7 @@ type Target = { operations: Copy[]; launch: { path: string; workingDirectory: st
 type Recipe = { version: 1; dependencies: Record<string, Dependency>; targets: Record<string, Target> }
 type Layout = { files: string[]; directories: string[] }
 type Preview = Layout & { launchCandidates: string[] }
-type Lock = { releases: Record<string, { appId: string; version: string | null; dependencies: Record<string, string> }>; files: Record<string, unknown>; directories: string[] }
+type Lock = { releases: Record<string, { appId: string; version: string | null; dependencies: Record<string, string> }>; files: Record<string, { size?: number; sha256?: string; executable?: boolean }>; directories: string[] }
 
 const newTarget = (): Target => ({ operations: [], launch: { path: '', workingDirectory: '', arguments: [] } })
 const initialRecipe = (): Recipe => ({ version: 1, dependencies: {}, targets: { [platforms[0]]: newTarget() } })
@@ -98,26 +99,6 @@ function DependencyPolicy({ dependency, change, remove }: { dependency: Dependen
   </fieldset>
 }
 
-export function TreePicker({ artifactId, choose, filesOnly = false }: { artifactId: string; choose: (path: string, file: boolean) => void; filesOnly?: boolean }) {
-  const [parent, setParent] = useState('')
-  const [open, setOpen] = useState(false)
-  const entries = usePage<InventoryEntry>(open ? `/artifacts/${enc(artifactId)}/inventory?parent=${enc(parent)}` : '')
-  return <details onToggle={event => setOpen(event.currentTarget.open)}>
-    <summary>Browse source tree</summary>
-    <p><strong>{parent || 'Artifact root'}</strong></p>
-    <div className="form-actions">
-      {parent && <button type="button" className="text-button" onClick={() => setParent(parent.split('/').slice(0, -1).join('/'))}>Parent directory</button>}
-      {!filesOnly && <button type="button" className="button button-secondary" onClick={() => choose(parent, false)}>{parent ? 'Use this directory' : 'Use entire tree'}</button>}
-    </div>
-    {entries.error ? <ProblemNotice error={entries.error} retry={entries.retry} /> : entries.loading ? <LoadingState /> : <ul className="compact-list">
-      {entries.value!.items.map(entry => <li key={entry.path}><button type="button" className="text-button" onClick={() => entry.type === 'Directory' ? setParent(entry.path) : choose(entry.path, true)}>
-        {entry.type === 'Directory' ? 'Open' : 'Use'} {entry.path.split('/').at(-1)}
-      </button></li>)}
-    </ul>}
-    {entries.controls}
-  </details>
-}
-
 function SourceControls({ dependency, operation, change, platform }: { dependency: Dependency; operation: Copy; change: (op: Copy) => void; platform: string }) {
   const { appId, selector } = dependency
   const app = useResource(`recipe-source-app:${appId}`, signal => read<DepotApp>(`/apps/${appId}`, signal))
@@ -142,10 +123,12 @@ function SourceControls({ dependency, operation, change, platform }: { dependenc
     : []
   const selectedAssociation = operation.associationId || (labelMatches.length === 1 ? labelMatches[0][0] : '')
   const automatic = !operation.associationLabel && !operation.associationId
-  const chosen = useResource(`recipe-source-association:${releaseId}:${selectedAssociation}`, signal => selectedAssociation
-    ? read<Association>(`/associations/${selectedAssociation}`, signal) : Promise.resolve(null))
+  const listed = items.find(item => item.id === selectedAssociation)
+  const unlistedId = listed ? '' : selectedAssociation
+  const chosen = useResource(`recipe-source-association:${releaseId}:${unlistedId}`, signal => unlistedId
+    ? read<Association>(`/associations/${unlistedId}`, signal) : Promise.resolve(null))
   const bound = selectedAssociation
-    ? items.find(item => item.id === selectedAssociation) || (chosen.value?.releaseId === releaseId ? chosen.value : undefined)
+    ? listed || (chosen.value?.releaseId === releaseId ? chosen.value : undefined)
     : automatic && items.length === 1 && !associations.value?.nextCursor ? items[0] : undefined
   const kind = (id: string) => id.startsWith('adtree:') ? 'Tree Artifact' : 'File Artifact'
   const choose = (source: string, file: boolean) => change({ ...operation, source, executable: file && operation.executable,
@@ -165,7 +148,7 @@ function SourceControls({ dependency, operation, change, platform }: { dependenc
     </select></label>{associations.controls}
       {labelMatches.length > 1 && <small>Several Artifacts share this label. Choose an exact Artifact or a unique label.</small>}
       {operation.associationId && selector.type !== 'release' && <small>This exact Artifact is tied to the current release. If the release moves, update this selection or use a release with one Artifact.</small>}
-      {bound?.artifactId.startsWith('adtree:') && <TreePicker key={bound.artifactId} artifactId={bound.artifactId} choose={choose} />}
+      {bound?.artifactId.startsWith('adtree:') && <ArtifactPicker key={bound.artifactId} artifactId={bound.artifactId} choose={choose} />}
     </>}
     {app.value?.kind === 'derived' && releaseId && <VirtualPicker releaseId={releaseId} platform={platform} choose={choose} />}
     {(app.value?.kind === 'derived' || bound?.artifactId.startsWith('adtree:')) && <label>Source path (blank for entire tree)<input value={operation.source} onChange={event => change({ ...operation, source: event.target.value })} /></label>}
@@ -180,15 +163,10 @@ function VirtualPicker({ releaseId, platform, choose }: { releaseId: string; pla
   return <details onToggle={event => setOpen(event.currentTarget.open)}>
     <summary>Browse Derived output</summary>
     {layout.error ? <ProblemNotice error={layout.error} retry={layout.retry} /> : layout.loading ? <LoadingState /> : layout.value &&
-      <label>Use source entry<select value="" onChange={event => {
-        const index = event.target.selectedIndex
-        if (index > 0) choose(event.target.value === '/' ? '' : event.target.value, index > layout.value!.directories.length + 1)
-      }}>
-        <option value="">Choose a file or directory</option>
-        <option value="/">Entire Derived output</option>
-        {layout.value.directories.map(path => <option key={path} value={path}>{path}/</option>)}
-        {Object.keys(layout.value.files).map(path => <option key={path} value={path}>{path}</option>)}
-      </select></label>}
+      <ResolvedTreePicker key={`${releaseId}:${platform}`} identity={`${releaseId}:${platform}`} choose={choose}
+        entries={[...layout.value.directories.map(path => ({ type: 'Directory' as const, path })),
+          ...Object.entries(layout.value.files).map(([path, file]) => ({ type: 'File' as const, path, size: file.size, sha256: file.sha256, executable: file.executable }))]} />}
+
   </details>
 }
 

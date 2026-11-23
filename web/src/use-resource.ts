@@ -5,7 +5,7 @@ export function useResource<T>(key: string, load: (signal: AbortSignal) => Promi
   const [state, setState] = useState<{ key: string; value?: T; error?: unknown }>({ key })
   useEffect(() => {
     const controller = new AbortController()
-    load(controller.signal).then(value => setState({ key, value })).catch(error => {
+    load(controller.signal).then(value => { if (!controller.signal.aborted) setState({ key, value }) }).catch(error => {
       if (!controller.signal.aborted) setState({ key, error })
     })
     return () => controller.abort()

@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react'
 import { ApiError, apiRequest, jsonBody, resource, type Association, type Declaration, type DeclarationSnapshot, type Page } from './api'
 import { LoadingState, ProblemNotice } from './components'
 import { useAuth } from './portal'
-import { TreePicker } from './recipes'
+import { ArtifactPicker, ResolvedTreePicker } from './artifact-browser'
 import { depot, manifest as gogManifest, record, strings, text } from './release-information'
 import { useResource } from './use-resource'
 
@@ -49,7 +49,7 @@ function SourcePicker({ sources, associationId, path, filesOnly, change }: { sou
       {sources.map(source => <option key={source.id} value={source.id}>{source.label}</option>)}
     </select></label>
     {chosen && <p>Source selection · {path || (chosen.artifactId.startsWith('adfile:') ? 'Entire file' : filesOnly ? 'Choose a file' : 'Entire tree')}</p>}
-    {chosen?.artifactId.startsWith('adtree:') && <TreePicker key={chosen.artifactId} artifactId={chosen.artifactId} filesOnly={filesOnly} choose={(path, file) => change(associationId, path, file)} />}
+    {chosen?.artifactId.startsWith('adtree:') && <ArtifactPicker key={chosen.artifactId} artifactId={chosen.artifactId} mode={filesOnly ? 'file' : 'any'} choose={(path, file) => change(associationId, path, file)} />}
   </>
 }
 
@@ -268,6 +268,10 @@ function ConfigurationForm({ releaseId, derived, snapshot, sources, doc, etag, r
               onChange={event => update({ launch: { ...form.launch!, workingDirectory: event.target.checked ? '' : null } })} />Override installed working directory</label>
             {form.launch.workingDirectory != null && <label>Installed working directory<input value={form.launch.workingDirectory} placeholder="Installation root"
               onChange={event => update({ launch: { ...form.launch!, workingDirectory: event.target.value } })} /></label>}
+            {form.launch.workingDirectory != null && layout?.directories && <details><summary>Browse installed directories from preview</summary>
+              <ResolvedTreePicker identity={`installation:${platform}`} mode="directory" entries={layout.directories.map(path => ({ type: 'Directory', path }))}
+                choose={path => update({ launch: { ...form.launch!, workingDirectory: path } })} />
+            </details>}
           </>}
         </details>
       </>}

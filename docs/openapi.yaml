@@ -5281,6 +5281,14 @@ paths:
         in: query
         schema: { type: string, maxLength: 256 }
         description: Case-sensitive UTF-8 path substring search, at most 256 bytes. Cannot combine with parent.
+      - name: kind
+        in: query
+        schema: { type: string, enum: [Directory, File] }
+        description: Restrict the inventory to one entry kind.
+      - name: order
+        in: query
+        schema: { type: string, enum: [folders, size] }
+        description: Folders first across pages. Within each kind, folders uses canonical path order and size orders largest files first with canonical path as the tie-breaker. Omission preserves the canonical inventory order. Cursors are scoped to these parameters.
       responses:
         '200':
           description: '200'

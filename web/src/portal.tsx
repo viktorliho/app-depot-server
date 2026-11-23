@@ -234,8 +234,8 @@ export function ServerWorkspace() { return <AppShell><Outlet /></AppShell> }
 
 export function AppWorkspace() {
   const { appId } = useParams()
-  const location = useLocation()
-  const app = useResource(`app:${appId}:${location.key}`, signal => apiRequest<DepotApp>(`/apps/${appId}`, { signal, authenticated: true }).then(result => result.value))
+  const { pathname } = useLocation()
+  const app = useResource(`app:${appId}:${pathname}`, signal => apiRequest<DepotApp>(`/apps/${appId}`, { signal, authenticated: true }).then(result => result.value))
   if (app.loading) return <div className="boot"><LoadingState label="Opening application…" /></div>
   if (app.error) return <AppShell><PageHeader title="Application unavailable" /><ProblemNotice error={app.error} retry={app.retry} /><ActionLink to="/apps" secondary>Back to applications</ActionLink></AppShell>
   return <AppShell app={app.value}><Outlet context={app.value} /></AppShell>
