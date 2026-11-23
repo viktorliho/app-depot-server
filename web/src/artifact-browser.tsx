@@ -301,9 +301,9 @@ export function ArtifactPicker({ artifactId, choose, mode = 'any', label = 'Brow
 }
 
 export function ResolvedTreePicker({ entries, identity, choose, mode = 'any' }: {
-  entries: InventoryEntry[]; identity: string; choose: (path: string, file: boolean) => void; mode?: Choice
+  entries: InventoryEntry[]; identity: string; choose?: (path: string, file: boolean) => void; mode?: Choice
 }) {
-  return <TreeBrowser mode={mode} choose={entry => choose(entry.path, entry.type === 'File')} source={{ key: identity, load: async query => {
+  return <TreeBrowser mode={mode} choose={choose ? entry => choose(entry.path, entry.type === 'File') : undefined} source={{ key: identity, load: async query => {
     const matches = entries.filter(entry => (query.search ? entry.path.includes(query.search) : parentOf(entry.path) === query.directory)
       && (!query.directoriesOnly || entry.type === 'Directory'))
     matches.sort((a, b) => (a.type === b.type ? 0 : a.type === 'Directory' ? -1 : 1)

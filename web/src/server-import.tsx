@@ -337,15 +337,16 @@ function InstallerReview({ report, hints, change, launch, setLaunch, platforms, 
     <dl className="facts">
       <div><dt>Product</dt><dd>{report.productName}</dd></div>
       <div><dt>Setup</dt><dd>{report.setup}</dd></div>
-      <div><dt>Format</dt><dd>{report.installerFormat} {report.installerVersion}</dd></div>
-      <div><dt>Backend</dt><dd>{report.engine} {report.engineVersion}</dd></div>
       <div><dt>Payload</dt><dd>{report.listedFileCount.toLocaleString()} listed files{report.approximateOutputBytes === null ? '' : ` · approximately ${bytes(report.approximateOutputBytes)}`}</dd></div>
-      <div><dt>Installer languages</dt><dd>{report.installerLanguages.join(', ') || 'Unknown'}</dd></div>
-      <div><dt>Language-tagged files</dt><dd>{Object.entries(report.languageTaggedFiles).map(([language, count]) => `${language} (${count})`).join(', ') || 'None reported'}</dd></div>
-      <div><dt>Redistributable directories</dt><dd>{report.redistributableRoots.join(', ') || 'None detected by path'}</dd></div>
-      <div><dt>Optional component relationships</dt><dd>Unknown</dd></div>
     </dl>
-    <details><summary>Source volumes and unresolved setup actions</summary>
+    <details><summary>Installer evidence and source volumes</summary>
+      <dl className="facts">
+        <div><dt>Format</dt><dd>{report.installerFormat} {report.installerVersion}</dd></div>
+        <div><dt>Extractor</dt><dd>{report.engine} {report.engineVersion}</dd></div>
+        <div><dt>Installer interface languages</dt><dd>{report.installerLanguages.join(', ') || 'Unknown'}</dd></div>
+        <div><dt>Language-tagged files</dt><dd>{Object.entries(report.languageTaggedFiles).map(([language, count]) => `${language} (${count})`).join(', ') || 'None reported'}</dd></div>
+        <div><dt>Redistributable directories</dt><dd>{report.redistributableRoots.join(', ') || 'None detected by path'}</dd></div>
+      </dl>
       <ul>{report.volumes.map(volume => <li key={volume.name}>{volume.name} · {bytes(volume.size)}</li>)}</ul>
       <ul>{report.unknownActions.map(action => <li key={action}>{action}</li>)}</ul>
     </details>

@@ -40,7 +40,7 @@ The Portal does not infer release counts, activity feeds, storage history, per-A
 
 ## Release overview and Artifact Explorer
 
-Release Details surfaces status, Draft publication and Add Artifact actions, supported platforms, Artifacts, launch entry points, installation information when present, and release notes and App description. **Advanced release details** contains version editing for Drafts, declarations, revision history, existing Artifact association, the combined JSON snapshot and deletion. Per-Artifact declarations are under **Advanced association details**. These views retain existing permissions and revision semantics.
+Release Details shows Draft publication and Add Artifact actions above the workspace. Overview links to files, installation configuration and launch targets. **Advanced** contains version editing for Drafts, declarations, revision history, existing Artifact association, the combined JSON snapshot and deletion. Per-Artifact declarations are under **Advanced association details**. These views retain existing permissions and revision semantics.
 
 Artifact Explorer shows a lazily expanded folder tree on the left and a paged contents list on the right. Narrow layouts expose folders through **Show folders**. Breadcrumbs, the parent action and browser history preserve the selected directory in the full Explorer. Single-click selects an item. Double-click, Enter or **Open folder** opens a directory. Arrow keys and Home/End move through the displayed rows. Folder disclosure buttons are keyboard accessible.
 
@@ -73,3 +73,19 @@ For an existing Release, use Installation Configuration → Detect installation
 components, choose a Tree, review the result and apply it to the editor. Saving creates
 a declaration revision with the existing concurrency check. The localization editor
 offers Unknown, Fixed, Bundled and Selectable packaging.
+
+## Release workspace and visual installation editor
+
+The release audit found that technical declaration forms competed with everyday actions and long prerequisite forms concealed the planned order. A blank evidence field could fail only after submission. The old preview also displayed a slice of paths without answering what would be installed.
+
+Release navigation uses URL-backed links with Overview, Artifacts, Installation, Launch and Advanced. Global release actions stay above the workspace. Installation uses a non-linear task list with one active editor and a shared unsaved draft. Installer cards show execution order. Focusable validation messages identify the relevant task. The plan is resolved on demand and summarizes the future Client workflow. Explore the resolved files through the same paginated browser used for Artifact content. These decisions follow the [GOV.UK task-list](https://design-system.service.gov.uk/components/task-list/) and [accessible error-summary](https://design.homeoffice.gov.uk/accessibility/standard/understandable) guidance.
+
+Publisher-authored prerequisites default to publisher evidence and use declared release platforms where supported. Disabling an executable means removing it from the draft plan. The original content and discovery evidence remain available. A conflict keeps the draft and requires explicit discard or manual reconciliation with the latest saved declaration.
+
+### Acceptance checklist for Overlord II
+
+1. Open the existing Published release. Verify that Overview shows Windows x86_64 and summarizes the Tree, localization, launch and prerequisite count.
+2. Open Installation. Verify fixed Russian localization, the base Tree and the configured launch target. Review the prerequisite cards in their configured order. Confirm that the retained legacy installers appear only as files or review evidence.
+3. Resolve the Windows x86_64 plan. Check the file count, logical size, package order and launch target. Browse the resulting layout and use search without opening a large JSON document.
+4. Open Artifacts and Launch from the same release. Verify relative paths, downloads and the launch editor. Repeat on a narrow window with the keyboard and the Explorer’s folder control.
+5. If intentionally editing metadata, verify that saving creates a new declaration revision for the published release and keeps the associated Tree identity.

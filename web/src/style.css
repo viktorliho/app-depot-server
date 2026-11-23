@@ -291,3 +291,28 @@ td small { display: block; color: var(--muted); margin-top: 4px; }
   .browser-row { grid-template-columns: minmax(0, 1fr) auto; }
   .browser-type { display: none; }
 }
+
+.release-nav { display: flex; flex-wrap: wrap; gap: .5rem; margin-block: 1rem; }
+.release-nav a { padding: .5rem .8rem; border: 1px solid currentColor; border-radius: .5rem; text-decoration: none; }
+.release-nav a[aria-current] { font-weight: 700; text-decoration: underline; text-underline-offset: .3em; }
+.release-summary, .installation-stages { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr)); gap: .75rem; margin-block: .75rem; }
+.release-summary > div, .installer-card, .installation-plan > li { padding: .85rem; border: 1px solid var(--border); border-radius: .65rem; min-width: 0; overflow-wrap: anywhere; }
+.release-summary dt { font-weight: 650; }
+.release-summary dd { margin: .25rem 0 0; }
+.installation-stages button { display: grid; text-align: start; align-content: start; min-width: 0; gap: .25rem; }
+.installation-stages button[aria-pressed=true] { outline: 2px solid currentColor; outline-offset: -2px; }
+.installation-stages span { font-weight: normal; overflow-wrap: anywhere; }
+.installer-heading { display: flex; flex-wrap: wrap; align-items: start; justify-content: space-between; gap: .5rem; }
+.installer-heading h4, .installer-heading p { margin: 0 0 .35rem; }
+.installer-card fieldset { margin-block-start: .75rem; min-width: 0; }
+.installation-plan { display: grid; gap: .5rem; padding-inline-start: 1.8rem; }
+.installation-plan span { display: block; margin-block-start: .25rem; }
+.field-error { padding: .5rem; border-inline-start: .25rem solid currentColor; font-weight: 650; }
+.release-nav a[aria-current], .installation-stages button[aria-pressed=true] { background: var(--accent-soft); }
+.installation-workspace fieldset, .installation-workspace input, .installation-workspace select { min-width: 0; }
+.installation-workspace { overflow-wrap: anywhere; }
+.installation-actions { position: sticky; bottom: 0; z-index: 1; background: var(--surface); border-top: 1px solid var(--border); padding-block: .5rem; }
+.installation-actions p { margin-block: .25rem .5rem; }
+.field-error { background: var(--danger-soft); color: var(--danger); }
+
+@media (max-width: 520px) { .installation-actions { position: static; } }

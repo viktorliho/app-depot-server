@@ -1,5 +1,6 @@
+import { platformName } from './installation-review'
 import { InstallationConfiguration } from './installation'
-import { depot, fileSize, GogInstallation, ReleaseLaunches, strings, text } from './release-information'
+import { depot, fileSize, GogInstallation, ReleaseLaunches, record, strings, text } from './release-information'
 import { RecipeSection } from './recipes'
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router'
@@ -246,7 +247,34 @@ export function ReleaseDetail() {
   const [error, setError] = useState<unknown>()
   const [notice, setNotice] = useState('')
   const [operation, setOperation] = useState('')
-  const [advanced, setAdvanced] = useState(false)
+  const [query] = useSearchParams()
+  const sections = app.kind === 'derived' ? ['Overview', 'Installation', 'Advanced'] : ['Overview', 'Artifacts', 'Installation', 'Launch', 'Advanced']
+  const section = sections.find(item => item.toLowerCase() === query.get('view')) || 'Overview'
+  const [installationVisited, setInstallationVisited] = useState(section === 'Installation')
+  useEffect(() => { if (section === 'Installation') setInstallationVisited(true) }, [section])
+  const artifactTotals = useResource(`release-totals:${releaseId}:${refresh}:${section === 'Overview'}`, async signal => {
+    if (section !== 'Overview' || app.kind === 'derived') return
+    let cursor: string | null = null
+    let count = 0
+    let size = 0
+    const sizes = new Map<string, number>()
+    do {
+      const page: Page<Association> = (await apiRequest<Page<Association>>(`/releases/${releaseId}/artifacts?pageSize=50${cursor ? `&cursor=${enc(cursor)}` : ''}`, { authenticated: true, signal })).value
+      for (let index = 0; index < page.items.length; index += 8) {
+        await Promise.all(page.items.slice(index, index + 8).map(async association => {
+          let bytes = sizes.get(association.artifactId)
+          if (bytes === undefined) {
+            bytes = (await apiRequest<Artifact>(`/artifacts/${enc(association.artifactId)}`, { authenticated: true, signal })).value.size ?? 0
+            sizes.set(association.artifactId, bytes)
+          }
+          size += bytes
+          count++
+        }))
+      }
+      cursor = page.nextCursor
+    } while (cursor)
+    return { count, size }
+  })
   const [showSnapshot, setShowSnapshot] = useState(false)
   const attempt = useRef<{ id: string; key: string } | null>(null)
   const publishKey = useRef(idempotencyKey())
@@ -295,29 +323,46 @@ export function ReleaseDetail() {
   const platforms = strings(releaseData?.platforms)
   const notes = text(releaseData?.notes)
   const description = text(depot(snapshot.value?.app.data)?.description)
+  const install = record(depot(installationSnapshot?.release.data)?.installation)
+  const localization = record(install?.localization)
+  const launchCount = snapshot.value?.associations.reduce((count, { declaration }) => {
+    const entries = depot(declaration.data)?.entryPoints
+    return count + (Array.isArray(entries) ? entries.length : 0)
+  }, 0)
   return <><PageHeader title={release!.version || 'Unversioned release'} description={`Release in ${app.name}`} icon={<ArtworkThumbnail app={app} />}
     actions={mutable && !derived ? <div className="form-actions"><ActionLink to={`${path}/artifacts/new`}>Add Artifact</ActionLink>
       {canPublish && <button className="button button-primary" onClick={() => void publish()} disabled={busy}>Publish release</button>}</div> : undefined} />
     <div className="identity-line"><StatusBadge value={release!.state} /><StatusBadge value={app.visibility} /></div>
     {mutable && !canPublish && <p className="subtle">Publish permission is required to publish.</p>}
     {error !== undefined && <ProblemNotice error={error} />}{notice && <Notice text={notice} />}{operation && <OperationNotice id={operation} />}
-    {snapshot.loading ? <LoadingState label="Loading release declarations…" /> : snapshot.error ? <ProblemNotice error={snapshot.error} retry={snapshot.retry} /> :
-      <section className="panel"><h2>Supported platforms</h2><p>{platforms.join(', ') || 'No release-wide platforms declared.'}</p></section>}
-    {derived && <RecipeSection key={release!.id + release!.state} appId={app.id} release={release!} editable={!!mutable} canPublish={canPublish} onChange={current.retry} onSaved={updated => { recipeEtag.current = { original: current.value?.etag, updated } }} />}
-    {!derived && <section className="panel"><h2>Contents / Artifacts</h2><p>Browse original files, download content and manage entry points for each Artifact.</p>{associations.loading ? <LoadingState /> : associations.error ? <ProblemNotice error={associations.error} retry={associations.retry} /> : <>
+    <nav className="release-nav" aria-label="Release sections">
+      {sections.map(item => <Link key={item}
+        aria-current={item === section ? 'page' : undefined} to={item === 'Overview' ? path : `${path}?view=${item.toLowerCase()}`}>{item}</Link>)}
+    </nav>
+    {section === 'Overview' && <section className="panel"><h2>Release overview</h2><dl className="release-summary">
+      <div><dt>Supported platforms</dt><dd>{platforms.map(platformName).join(', ') || 'No release-wide platforms declared'}</dd></div>
+      {!derived && <div><dt>Artifacts</dt><dd>{artifactTotals.value ? `${artifactTotals.value.count} · ${fileSize(artifactTotals.value.size)}` : artifactTotals.error ? 'Size unavailable' : 'Calculating size…'}<br /><Link to={`${path}?view=artifacts`}>Files and downloads</Link></dd></div>}
+      <div><dt>Installation configuration</dt><dd>{install ? 'Configured' : 'Optional'} · <Link to={`${path}?view=installation`}>Open installation</Link></dd></div>
+      {install && <><div><dt>Application languages</dt><dd>{text(localization?.language) || strings(localization?.languages).join(', ') || (localization?.mode === 'selectable' ? 'Selected during installation' : 'Unconfirmed')}</dd></div>
+        <div><dt>Prerequisite installers</dt><dd>{Array.isArray(install.prerequisites) ? install.prerequisites.length : 0}</dd></div></>}
+      {!derived && <div><dt>Launch entry points</dt><dd>{launchCount ?? 'Loading…'} · <Link to={`${path}?view=launch`}>Open launch</Link></dd></div>}
+    </dl></section>}
+    {snapshot.loading ? <LoadingState label="Loading release declarations…" /> : snapshot.error ? <ProblemNotice error={snapshot.error} retry={snapshot.retry} /> : null}
+    {derived && section === 'Overview' && <RecipeSection key={release!.id + release!.state} appId={app.id} release={release!} editable={!!mutable} canPublish={canPublish} onChange={current.retry} onSaved={updated => { recipeEtag.current = { original: current.value?.etag, updated } }} />}
+    {!derived && section === 'Artifacts' && <section className="panel"><h2>Contents / Artifacts</h2><p>Browse original files, download content and manage entry points for each Artifact.</p>{associations.loading ? <LoadingState /> : associations.error ? <ProblemNotice error={associations.error} retry={associations.retry} /> : <>
       {!associations.value!.items.length && <EmptyState title="No Artifacts associated" detail="Upload or associate an Artifact before publishing." />}
       {associations.value!.items.length === 1 && !associations.value!.nextCursor && <p><Link className="button button-primary" to={`/apps/${app.id}/releases/${releaseId}/artifacts/${associations.value!.items[0].id}`}>Explore content</Link></p>}
       {associations.value!.items.map(item => <ArtifactRow key={item.id} appId={app.id} association={item} label={artifactLabels.get(item.id) || ''} editable={allowed} onSaved={snapshot.retry} removable={!!mutable} onRemoved={id => { setOperation(id); setRefresh(value => value + 1); current.retry() }} />)}
       {associations.value!.nextCursor && <button className="button button-secondary" onClick={() => setCursor(associations.value!.nextCursor!)}>Next Artifacts page</button>}
     </>}</section>}
-    {snapshot.value && !derived && <><ReleaseLaunches snapshot={snapshot.value} path={path} editable={allowed} /><GogInstallation snapshot={snapshot.value} path={path} /></>}
-    {installationSnapshot && <InstallationConfiguration key={release!.id} releaseId={release!.id} derived={derived} editable={allowed} snapshot={installationSnapshot} onSaved={snapshot.retry} />}
-    {snapshot.value && <section className="panel"><h2>Release notes and description</h2>
+    {snapshot.value && !derived && section === 'Launch' && <ReleaseLaunches snapshot={snapshot.value} path={path} editable={allowed} />}
+    {installationSnapshot && (installationVisited || section === 'Installation') && <div hidden={section !== 'Installation'}><InstallationConfiguration key={release!.id} releaseId={release!.id} derived={derived} editable={allowed} snapshot={installationSnapshot} onSaved={snapshot.retry} /></div>}
+    {snapshot.value && !derived && section === 'Installation' && <GogInstallation snapshot={snapshot.value} path={path} />}
+    {snapshot.value && section === 'Overview' && <section className="panel"><h2>Release notes and description</h2>
       {notes && <p className="release-prose">{notes}</p>}{description && <p className="release-prose">{description}</p>}
       {!notes && !description && <p>No notes or description provided.</p>}
     </section>}
-    <details className="panel technical-details" onToggle={event => { if (event.currentTarget.open) setAdvanced(true) }}><summary>Advanced release details</summary>
-      {advanced && <>
+    {section === 'Advanced' && <section className="panel"><h2>Advanced release details</h2>
         <TechnicalDetails><code>Release ID: {releaseId}</code></TechnicalDetails>
         {mutable && <section className="panel form-panel"><h2>Draft release metadata</h2><form className="form-stack" onSubmit={updateVersion}>
           <label>Version (optional)<input value={version} onChange={event => setVersion(event.target.value)} /></label><button className="button button-secondary" disabled={busy}>Save version</button></form></section>}
@@ -328,8 +373,7 @@ export function ReleaseDetail() {
           {showSnapshot && snapshot.value && <pre className="json-preview">{JSON.stringify(snapshot.value, null, 2)}</pre>}
         </details>
         {allowed && <section className="panel"><h2>Permanent deletion</h2><p>Deleting this Release revokes access and starts asynchronous cleanup. This cannot be undone.</p><ConfirmDialog label="Delete release" detail="Permanently delete this Release and its Artifact associations? Shared immutable content may remain available through other releases." confirm="Delete release" onConfirm={remove} /></section>}
-      </>}
-    </details>
+    </section>}
   </>
 }
 

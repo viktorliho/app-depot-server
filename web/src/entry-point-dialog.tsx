@@ -1,7 +1,8 @@
+import { platformName } from './installation-review'
 import { useEffect, useRef, useState } from 'react'
 import { ApiError, apiRequest, idempotencyKey, jsonBody, resource, type Artifact, type Declaration } from './api'
 import { ArtifactPicker } from './artifact-browser'
-import { EmptyState, LoadingState, ProblemNotice, TechnicalDetails } from './components'
+import { EmptyState, LoadingState, ProblemNotice } from './components'
 import { useAuth } from './portal'
 import { depot, manifest, record, strings, text } from './release-information'
 import { useResource } from './use-resource'
@@ -125,16 +126,24 @@ export function EntryPointDialog({ item, releaseId, associationId, allowed, targ
       {structured && !entries.length && <EmptyState title="No entry points" detail="Select a file in the Explorer to add an entry point." />}
       <fieldset disabled={busy} className="entry-point-forms">{structured && entries.map((entry, index) => {
         const launch = object(entry.launch) ? entry.launch : null
-        return <div className="form-panel" key={String(entry.id || index)}><h3>Entry point {index + 1}</h3><p>Target: <code>{targetLabel(entry)}</code></p>
+        return <div className="form-panel" key={String(entry.id || index)}><h3>{text(entry.label) || targetLabel(entry)}</h3><p>Launch executable · <code>{targetLabel(entry)}</code></p>
         <label>Label (optional)<input value={typeof entry.label === 'string' ? entry.label : ''} readOnly={!allowed} onChange={event => changeEntry(index, { label: event.target.value || undefined })} /></label>
         {allowed && <label>Add target platform<select value="" onChange={event => {
           if (event.target.value) changeEntry(index, { platforms: [...strings(entry.platforms), event.target.value] })
         }}><option value="">Choose a platform</option>
           {['windows/x86_64', 'windows/aarch64', 'linux/x86_64', 'linux/aarch64', 'macos/x86_64', 'macos/aarch64']
             .filter(platform => !strings(entry.platforms).includes(platform))
-            .map(platform => <option key={platform}>{platform}</option>)}
+            .map(platform => <option key={platform} value={platform}>{platformName(platform)}{releasePlatforms.includes(platform) ? ' · Release target' : ''}</option>)}
         </select></label>}
+        <div className="identity-line">{strings(entry.platforms).map(platform => <span key={platform}>
+          {platformName(platform)} {allowed && <button type="button" className="text-button" aria-label={`Remove ${platformName(platform)} target`}
+            onClick={() => changeEntry(index, { platforms: strings(entry.platforms).filter(value => value !== platform) })}>Remove</button>}
+        </span>)}</div>
+        <p className="subtle">These targets describe the executable OS and architecture. The client chooses its runtime.</p>
+        <details><summary>Advanced entry point details</summary>
+          <p><code>Entry ID: {String(entry.id)}</code></p>
         <label>Target operating systems and CPU architectures (one per line; optional)<textarea rows={3} value={Array.isArray(entry.platforms) ? entry.platforms.join('\n') : ''} readOnly={!allowed} placeholder={'linux/x86_64\nwindows/x86_64'} onChange={event => changeEntry(index, { platforms: event.target.value.split('\n').map(s => s.trim()).filter(Boolean) })} /></label>
+        </details>
         {entry.launch !== undefined && (!launch || launch.method !== 'NativePortableV1') ?
           <p role="status">This entry has an unsupported launch declaration. It remains unchanged here; use Advanced JSON to inspect or replace it.</p> : <>
           <label>Execution method<select value={entry.launch === undefined ? 'none' : 'native'} disabled={!allowed} onChange={event => changeEntry(index, { launch: event.target.value === 'native' ? launch && launch.method === 'NativePortableV1' ? launch : { method: 'NativePortableV1' } : undefined })}>
@@ -155,7 +164,7 @@ export function EntryPointDialog({ item, releaseId, associationId, allowed, targ
             {validation.value?.items[index] && <p className="subtle">Saved launch: {validation.value.items[index].launchStatus}{validation.value.items[index].launchReason && ` (${validation.value.items[index].launchReason})`}</p>}
           </>}
         </>}
-        <TechnicalDetails><code>Entry ID: {String(entry.id)}</code></TechnicalDetails>
+
         {allowed && <div className="form-stack">
           {item.kind === 'Tree' && <ArtifactPicker artifactId={item.id} mode="file" label="Change target using Explorer" choose={path => {
             const previous = record(entry.target)
