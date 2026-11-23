@@ -117,7 +117,7 @@ async function verifyVisualRecipe(page, base, preview, treeAssociationId) {
   if (await editor.getByRole('button', { name: 'Save and validate recipe' }).count()) throw new Error('Published recipe was editable')
 }
 
-async function verifyGogImporter(page, base, inbox, fixtures) {
+async function verifyGogImporter(page, base, inbox, fixtures, preview) {
   await cp(join(fixtures, 'multi'), join(inbox, 'synthetic-gog'), { recursive: true })
   await page.goto(`${base}artifacts/new-app`, { waitUntil: 'domcontentloaded' })
   await page.getByLabel('Source').selectOption('server')
@@ -150,6 +150,81 @@ async function verifyGogImporter(page, base, inbox, fixtures) {
       createHash('sha256').update(await readFile(join(fixtures, 'multi/spanning-1b.bin'))).digest('hex')) {
     throw new Error('GOG import modified an Inbox volume')
   }
+
+  await cp(join(fixtures, 'launch'), join(inbox, 'synthetic-launch'), { recursive: true })
+  await page.goto(`${base}artifacts/new-app`, { waitUntil: 'domcontentloaded' })
+  await page.getByLabel('Source').selectOption('server')
+  await page.getByLabel('Artifact type').selectOption('GogOfflineInstaller')
+  await page.getByRole('button', { name: 'synthetic-launch', exact: true }).click()
+  await page.getByRole('button', { name: 'Select this directory' }).click()
+  await page.getByRole('button', { name: 'Analyze installer' }).click()
+  const candidate = review.getByLabel('Candidate launch file')
+  const executableOption = candidate.locator('option').filter({ hasText: /app\.exe/ })
+  await executableOption.waitFor({ state: 'attached' })
+  const executable = await executableOption.textContent()
+  await candidate.selectOption({ label: executable })
+  const generate = review.getByLabel('Create launch entry point from selected executable')
+  if (!(await generate.isChecked())) throw new Error('Launch creation was not offered by default')
+  await generate.uncheck()
+  await generate.check()
+  await review.getByRole('combobox', { name: 'Working directory', exact: true }).selectOption('custom')
+  await review.getByLabel('Working directory path').fill(executable.includes('/') ? 'app/docs' : 'docs')
+  await review.getByRole('button', { name: 'Add launch argument' }).click()
+  await review.getByLabel('Launch argument 1').fill('--windowed mode')
+  await page.getByLabel('App name').fill('Synthetic GOG launch')
+  await page.getByRole('button', { name: 'Import and save Draft', exact: true }).click()
+  await page.getByText('Imported into a Draft release.', { exact: true }).waitFor({ timeout: 30000 })
+  await page.getByRole('link', { name: 'Open release', exact: true }).click()
+  await page.getByRole('heading', { name: 'Installation information' }).waitFor()
+  await page.getByText('Declared launch file', { exact: true }).waitFor()
+  const releaseUrl = page.url()
+  if (await page.locator('.json-preview').count()) throw new Error('Release overview rendered advanced JSON')
+  await page.getByRole('link', { name: 'Edit entry points' }).click()
+  await page.getByText('Portable launches: Valid').waitFor()
+  if (await page.getByLabel('Argument 1').inputValue() !== '--windowed mode') throw new Error('Generated launch arguments changed')
+  const association = new URL(page.url()).pathname.split('/').pop()
+  // A v0.5.0 association contains the manifest and no entryPoints field.
+  const legacyStatus = await page.evaluate(async id => {
+    const path = `/api/v1/associations/${id}/declarations`
+    const session = await fetch('/api/v1/auth/sessions/current').then(response => response.json())
+    const before = await fetch(path)
+    const { data } = await before.json()
+    delete data.appDepot.entryPoints
+    data.appDepot.custom = { keep: true }
+    return (await fetch(path, { method: 'PUT', headers: { 'Content-Type': 'application/json',
+      'X-CSRF-Token': session.csrfToken, 'If-Match': before.headers.get('ETag') }, body: JSON.stringify({ data }) })).status
+  }, association)
+  if (legacyStatus !== 200) throw new Error(`Could not prepare v0.5.0 declaration: ${legacyStatus}`)
+  await page.goto(releaseUrl)
+  await page.getByText('Selected launch candidate (user provided)', { exact: true }).waitFor()
+  await page.getByRole('button', { name: 'Publish release' }).click()
+  await page.getByText('Release published. Artifact composition is now immutable.').waitFor()
+  await page.getByRole('link', { name: 'Open entry point editor' }).click()
+  await page.getByRole('button', { name: 'Create entry point from GOG candidate' }).click()
+  const concurrentStatus = await page.evaluate(async id => {
+    const path = `/api/v1/associations/${id}/declarations`
+    const session = await fetch('/api/v1/auth/sessions/current').then(response => response.json())
+    const before = await fetch(path)
+    const { data } = await before.json()
+    data.appDepot.custom.concurrent = true
+    return (await fetch(path, { method: 'PUT', headers: { 'Content-Type': 'application/json',
+      'X-CSRF-Token': session.csrfToken, 'If-Match': before.headers.get('ETag') }, body: JSON.stringify({ data }) })).status
+  }, association)
+  if (concurrentStatus !== 200) throw new Error(`Could not write concurrent declaration: ${concurrentStatus}`)
+  const staleSave = page.waitForResponse(response => response.url().endsWith(`/associations/${association}/declarations`) && response.request().method() === 'PUT')
+  await page.getByRole('button', { name: 'Save entry points' }).click()
+  if ((await staleSave).status() !== 412) throw new Error('Stale entry point editor overwrote the current declaration')
+  await page.getByRole('button', { name: 'Reload saved entry points' }).click()
+  await page.getByRole('button', { name: 'Create entry point from GOG candidate' }).click()
+  await page.getByRole('button', { name: 'Save entry points' }).click()
+  await page.getByText('Entry points saved as a new declaration revision.').waitFor()
+  await restartLanPreview(preview)
+  await page.reload()
+  await page.getByText('Portable launches: Valid').waitFor()
+  const preserved = await page.evaluate(async id => (await fetch(`/api/v1/associations/${id}/declarations`).then(response => response.json())).data.appDepot, association)
+  if (preserved.gogOfflineInstaller?.user.candidateExecutable !== executable || preserved.custom?.keep !== true || preserved.custom?.concurrent !== true ||
+      preserved.entryPoints?.[0]?.platforms?.[0] !== 'windows/x86_64') throw new Error('Legacy conversion lost declaration data')
+
 }
 
 async function stopServer(child, label) {
@@ -679,6 +754,7 @@ try {
   const releaseId = new URL(page.url()).pathname.split('/').pop()
   await page.getByRole('heading', { name: 'test-v1' }).waitFor()
   const staleReleaseEtag = await page.evaluate(async id => (await fetch(`/api/v1/releases/${id}`)).headers.get('ETag'), releaseId)
+  await page.getByText('Advanced release details', { exact: true }).click()
   await page.getByLabel('Version (optional)').fill('test-v2')
   await page.getByRole('button', { name: 'Save version' }).click()
   await page.getByRole('heading', { name: 'test-v2' }).waitFor()
@@ -760,6 +836,7 @@ try {
   await page.getByRole('button', { name: 'Save Draft' }).click()
   await page.getByText(/Source file mtime-changed\.bin changed size or modification time after selection/).waitFor({ timeout: 30000 })
   await page.goto(`${base}apps/${draftId}/releases/${releaseId}`)
+  await page.getByText('Advanced association details', { exact: true }).first().click()
   const associationDeclarations = page.getByRole('heading', { name: 'Association declarations' }).first().locator('..')
   await associationDeclarations.getByRole('button', { name: 'Advanced JSON' }).click()
   await associationDeclarations.getByLabel('Current JSON value').fill('{"artifact":"data"}')
@@ -789,6 +866,7 @@ try {
   if (standardAssociationData.appDepot?.label !== 'Primary payload' || standardAssociationData.appDepot?.purpose !== 'distribution') {
     throw new Error('Standard association metadata was not saved')
   }
+  await page.getByText('Advanced release details', { exact: true }).click()
   const releaseDeclarations = page.getByRole('heading', { name: 'Release declarations' }).locator('..')
   await releaseDeclarations.getByRole('button', { name: 'Advanced JSON' }).click()
   await releaseDeclarations.getByLabel('Current JSON value').fill('{"release":"data"}')
@@ -822,7 +900,10 @@ try {
   await mkdir(join(treeRoot, '.Trashes'), { recursive: true })
   await writeFile(join(treeRoot, '.Trashes', 'old'), 'trash metadata')
   await writeFile(join(treeRoot, '.hidden-game'), 'valid hidden game data')
-  await Promise.all(Array.from({ length: 51 }, (_, index) => writeFile(join(treeRoot, `zero-${String(index).padStart(2, '0')}.txt`), '')))
+  for (let start = 0; start < 2048; start += 128) {
+    await Promise.all(Array.from({ length: 128 }, (_, index) =>
+      writeFile(join(treeRoot, `zero-${String(start + index).padStart(4, '0')}.txt`), '')))
+  }
   await page.goto(`${base}apps/${draftId}/releases/${releaseId}/uploads/new`)
   await page.getByLabel('Artifact type').selectOption('BareTree')
   await page.getByLabel('Directory files').setInputFiles(treeRoot)
@@ -929,7 +1010,10 @@ try {
   await page.getByText('Entry points saved as a new declaration revision.').waitFor()
   await page.getByRole('button', { name: 'browser-tree', exact: true }).click()
   await page.getByRole('button', { name: 'Next page' }).click()
-  await page.getByText('📄 zero-50.txt').waitFor()
+  await page.getByText('📄 zero-0050.txt').waitFor()
+  if (await page.locator('.artifact-inventory tbody tr').count() !== 50) throw new Error('Large Tree was not bounded to 50 rows')
+  await page.getByRole('button', { name: 'Previous page' }).click()
+  await page.getByText('📄 zero-0000.txt').waitFor()
   await page.getByLabel('Search original paths').fill('tree.txt')
   await page.getByRole('button', { name: 'Search', exact: true }).click()
   await page.getByText('📄 browser-tree/nested/tree.txt', { exact: true }).waitFor()
@@ -975,6 +1059,7 @@ try {
   await page.getByText('Entry points saved as a new declaration revision.').waitFor()
   await page.goto(`${base}apps/${draftId}/releases/${releaseId}`)
   const priorAssociationIds = await page.evaluate(async id => (await (await fetch(`/api/v1/releases/${id}/artifacts?pageSize=100`)).json()).items.map(item => item.id), releaseId)
+  await page.getByText('Advanced release details', { exact: true }).click()
   await page.getByLabel('Artifact ID').fill(originalArtifact)
   await page.getByRole('button', { name: 'Associate Artifact' }).click()
   await page.getByText('Existing Artifact associated').waitFor()
@@ -1102,6 +1187,7 @@ try {
   await page.getByRole('dialog', { name: 'Delete channel preview' }).getByRole('button', { name: 'Delete channel' }).click()
   await page.getByRole('heading', { name: 'No channels' }).waitFor()
   await page.goto(`${base}apps/${draftId}/releases/${firstReleaseId}`)
+  await page.getByText('Advanced release details', { exact: true }).click()
   await page.getByRole('button', { name: 'Delete release' }).click()
   await page.keyboard.press('Escape')
   if (await page.getByRole('dialog', { name: 'Delete release' }).isVisible()) throw new Error('Confirmation dialog did not close with Escape')
@@ -1212,6 +1298,7 @@ try {
       throw new Error('Source instance changed during isolated offline restore')
     }
     await page.goto(`${base}apps/${draftId}/releases/${integratedIds.releaseId}`)
+    await page.getByText('Advanced release details', { exact: true }).click()
     await page.getByRole('button', { name: 'Delete release' }).click()
     await page.getByRole('dialog', { name: 'Delete release' }).getByRole('button', { name: 'Delete release' }).click()
     await page.getByRole('heading', { name: 'Delete release operation' }).waitFor()
@@ -1524,7 +1611,7 @@ try {
     if (httpIdentity !== serverFileIdentity) throw new Error('HTTP and Server import created different File Artifact identities for the same bytes')
     if (process.env.GOG_TEST_FIXTURES) {
       stage('analyzing, importing and publishing a synthetic multipart Inno installer')
-      await verifyGogImporter(page, base, inboxPath, process.env.GOG_TEST_FIXTURES)
+      await verifyGogImporter(page, base, inboxPath, process.env.GOG_TEST_FIXTURES, preview)
     }
     stage('checking import authorization, traversal and CSRF boundaries')
     const importBoundary = await page.evaluate(async () => {

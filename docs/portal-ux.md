@@ -38,9 +38,15 @@ Server Admins can list and create users, change Publish and Server Admin permiss
 
 The Portal does not infer release counts, activity feeds, storage history, per-App grants, or global operation lists from incomplete data. Static deployment configuration, user deletion, password recovery, and online restore are unavailable through the current API. New backend capabilities require separate authorization and contract updates.
 
+## Release overview and Artifact Explorer
+
+Release Details surfaces status, Draft publication and Add Artifact actions, supported platforms, Artifacts, launch entry points, installation information when present, and release notes and App description. **Advanced release details** contains version editing for Drafts, declarations, revision history, existing Artifact association, the combined JSON snapshot and deletion. Per-Artifact declarations are under **Advanced association details**. These views retain existing permissions and revision semantics.
+
+Artifact Explorer presents original directories and files with human-readable sizes, hierarchical breadcrumbs, search, downloads and 50-entry cursor pages. Expand a row's technical details to inspect its original path, executable permission and digest. Select a regular file to create or change an association entry point, pick the target platform, and optionally declare NativePortableV1 working directory and literal arguments. Saving validates the point and uses the loaded declaration's strong ETag. An external edit requires reloading before saving again.
+
 ## GOG Offline Installer
 
-In Add Artifact select **Import from server storage**, choose **GOG Offline Installer**, open the installer directory in Inbox and choose **Select this directory**. Use **Analyze installer**. If there is more than one setup candidate, choose its executable and repeat analysis. The review distinguishes format and volume evidence, installer UI languages, tagged assets and inferred redistributable groups. Add a game version, product name override, launch candidate or notes if known. Import saves a Draft. Open the resulting Release to inspect the association declaration and publish separately. The Server Storage progress view supports cancellation and retry. [Manifest and limitations](gog-offline-import.md)
+In Add Artifact select **Import from server storage**, choose **GOG Offline Installer**, open the installer directory in Inbox and choose **Select this directory**. Use **Analyze installer**. If there is more than one setup candidate, choose its executable and repeat analysis. The review distinguishes format and volume evidence, installer UI languages, tagged assets and inferred redistributable groups. Add a game version, product name override, launch candidate or notes if known. Import saves a Draft. Select a launch file to offer a Windows entry point with optional working directory and arguments. Clear the checkbox to retain only the candidate. Open the resulting Release to inspect GOG installation information and publish separately. Older candidate-only manifests support explicit creation from the Artifact Explorer. The Server Storage progress view supports cancellation and retry. [Manifest and limitations](gog-offline-import.md)
 
 ## Derived Applications
 

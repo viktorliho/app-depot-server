@@ -6220,6 +6220,23 @@ components:
         gameVersion: { type: string, maxLength: 255, default: '' }
         candidateExecutable: { type: string, maxLength: 1024, default: '' }
         notes: { type: string, maxLength: 4096, default: '' }
+    GogEntryPoint:
+      type: object
+      additionalProperties: false
+      required: [platform]
+      description: Optional initial association launch entry point. Requires an explicitly selected reviewed candidateExecutable.
+      properties:
+        platform: { type: string, enum: ['windows/x86_64', 'windows/aarch64'] }
+        workingDirectory:
+          type: string
+          maxLength: 1024
+          description: Exact recovered Tree directory. Empty selects the root. Omission selects the target's parent.
+        arguments:
+          type: array
+          maxItems: 64
+          default: []
+          description: Literal process arguments. Controls are forbidden. UTF-8 limits are 4096 bytes per argument and 16384 in total.
+          items: { type: string, maxLength: 4096 }
     GogReview:
       type: object
       required: [setup, analysisId]
@@ -6229,6 +6246,8 @@ components:
         analysisId: { type: string, pattern: '^[0-9a-f]{64}$' }
         hints:
           $ref: '#/components/schemas/GogReviewHints'
+        entryPoint:
+          $ref: '#/components/schemas/GogEntryPoint'
     GogInstallationManifestV1:
       type: object
       description: Initial data.appDepot.gogOfflineInstaller association declaration.
@@ -7286,6 +7305,16 @@ components:
             const: urn:app-depot:problem:recipe_limit
       - properties:
           code:
+            const: invalid_gog_launch
+          type:
+            const: urn:app-depot:problem:invalid_gog_launch
+      - properties:
+          code:
+            const: gog_launch_platform
+          type:
+            const: urn:app-depot:problem:gog_launch_platform
+      - properties:
+          code:
             const: invalid_gog_source
           type:
             const: urn:app-depot:problem:invalid_gog_source
@@ -7595,6 +7624,8 @@ components:
       - unsupported_artifact_kind
       - rate_limited
       - invalid_gog_source
+      - invalid_gog_launch
+      - gog_launch_platform
       - gog_missing_volume
       - gog_invalid_volume
       - gog_unsupported_format

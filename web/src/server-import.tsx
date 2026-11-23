@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { depot, strings } from './release-information'
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react'
 import { useOutletContext, useParams } from 'react-router'
 import { apiRequest, idempotencyKey, jsonBody, resource, type DepotApp, type FinalizationResult, type Release } from './api'
 import { ActionLink, LoadingState, ProblemNotice } from './components'
@@ -17,6 +18,8 @@ type Analysis = { setup: string; productName: string; installerVersion: string; 
   languageTaggedFiles: Record<string, number>; redistributableRoots: string[]; candidateExecutables: string[];
   listedFileCount: number; approximateOutputBytes: number | null; unknownActions: string[] }
 type AnalysisResult = { candidates: string[]; analysis: Analysis | null; analysisId: string | null }
+type Launch = { platform: string; workingDirectory?: string; arguments: string[] }
+const windowsPlatforms = ["windows/x86_64", "windows/aarch64"]
 type ReviewHints = { productName: string; gameVersion: string; candidateExecutable: string; notes: string }
 const emptyHints: ReviewHints = { productName: '', gameVersion: '', candidateExecutable: '', notes: '' }
 const enc = encodeURIComponent
@@ -43,6 +46,12 @@ export function ServerImportPage({ target, mode, onBusyChange }: { target: Inges
   const canManage = !!user && (target === 'new-app' ? canCreate : !!app && (user.serverAdmin || user.id === app.ownerId))
   const release = useResource(`import-release:${releaseId || ''}`, signal => target === 'release'
     ? resource<Release>(`/releases/${releaseId}`, signal).then(result => result.value) : Promise.resolve(undefined))
+  const targetDeclaration = useResource(`import-release-declaration:${mode + target + releaseId}`, signal =>
+    target === 'release' && mode === 'GogOfflineInstaller'
+      ? apiRequest<{ data: unknown }>(`/releases/${releaseId}/declarations`, { authenticated: true, signal }).then(result => result.value)
+      : Promise.resolve(undefined))
+  const supported = strings(depot(targetDeclaration.value?.data)?.platforms)
+  const launchPlatforms = windowsPlatforms.filter(platform => !supported.length || supported.includes(platform))
   const roots = useResource('import-roots', signal => apiRequest<{ items: Root[] }>('/server-imports/roots', { authenticated: true, signal }).then(result => result.value))
   const [rootId, setRootId] = useState('')
   const [path, setPath] = useState('')
@@ -58,6 +67,7 @@ export function ServerImportPage({ target, mode, onBusyChange }: { target: Inges
   const [analyzing, setAnalyzing] = useState(false)
   const [setup, setSetup] = useState('')
   const [hints, setHints] = useState(emptyHints)
+  const [launch, setLaunch] = useState<Launch>()
   const [name, setName] = useState('')
   const [progress, setProgress] = useState<Progress | null>(null)
   const [error, setError] = useState<unknown>()
@@ -88,7 +98,7 @@ export function ServerImportPage({ target, mode, onBusyChange }: { target: Inges
   useEffect(() => () => controller.current?.abort(), [])
   const targetValue = useMemo(() => target === 'release' ? { releaseId } : target === 'app'
     ? { appId: app?.id, createRelease: true } : { newAppName: name.trim() }, [target, releaseId, app?.id, name])
-  function navigateDirectory(next: string) { setPath(next); setCursor(''); setPreviousCursors([]); setSelected(null); setAnalysis(undefined); setSetup(''); setHints(emptyHints) }
+  function navigateDirectory(next: string) { setPath(next); setCursor(''); setPreviousCursors([]); setSelected(null); setAnalysis(undefined); setSetup(''); setHints(emptyHints); setLaunch(undefined) }
   function choose(entry: Entry) {
     const chosen = path ? `${path}/${entry.name}` : entry.name
     if (entry.entryType === 'Directory') navigateDirectory(chosen)
@@ -105,6 +115,10 @@ export function ServerImportPage({ target, mode, onBusyChange }: { target: Inges
         ...jsonBody({ rootId, path: selected.path, setup: setup || undefined }),
       })
       setAnalysis(value)
+      if (!value.analysis?.candidateExecutables.includes(hints.candidateExecutable)) {
+        setHints(current => ({ ...current, candidateExecutable: '' }))
+        setLaunch(undefined)
+      }
       if (value.analysis && target === 'new-app') setName(current => current || value.analysis!.productName)
     } catch (problem) {
       if (abort.signal.aborted) setMessage('Analysis cancelled.')
@@ -114,11 +128,11 @@ export function ServerImportPage({ target, mode, onBusyChange }: { target: Inges
   }
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!selected || !rootId || !user || !canManage || directory !== (selected.type === 'Directory') || (gog && !analysis?.analysisId)) return
+    if (!selected || !rootId || !user || !canManage || directory !== (selected.type === 'Directory') || (gog && (!analysis?.analysisId || (launch && !launchPlatforms.includes(launch.platform))))) return
     const publish = !gog && (event.nativeEvent as SubmitEvent).submitter instanceof HTMLButtonElement &&
       (event.nativeEvent as SubmitEvent).submitter?.getAttribute('value') === 'publish'
     const request = { rootId, path: selected.path, mode, target: targetValue,
-      gogReview: gog && analysis?.analysis ? { setup: analysis.analysis.setup, analysisId: analysis.analysisId, hints } : undefined }
+      gogReview: gog && analysis?.analysis ? { setup: analysis.analysis.setup, analysisId: analysis.analysisId, hints, entryPoint: hints.candidateExecutable && launch && launchPlatforms.includes(launch.platform) ? launch : undefined } : undefined }
     const fingerprint = JSON.stringify(request)
     const key = keyRef.current?.fingerprint === fingerprint ? keyRef.current.key : storedKey(fingerprint)
     keyRef.current = { fingerprint, key }
@@ -155,9 +169,15 @@ export function ServerImportPage({ target, mode, onBusyChange }: { target: Inges
           const update = JSON.parse(data) as Progress
           setProgress(update)
           if (update.phase === 'Failed') {
-            if (update.problem?.code === 'session_cancelled') setProgress({ ...update, phase: 'Cancelled' })
-            newAttemptRequired = ['source_changed', 'hash_mismatch', 'idempotency_conflict', 'session_cancelled'].includes(update.problem?.code || '')
-            throw new Error(update.problem?.title || 'Server import failed.')
+            const problem = update.problem ?? update.result?.problem
+            if (problem?.code === 'session_cancelled') setProgress({ ...update, phase: 'Cancelled' })
+            newAttemptRequired = ['source_changed', 'hash_mismatch', 'idempotency_conflict', 'session_cancelled'].includes(problem?.code || '')
+            if (problem?.code === 'gog_launch_platform') {
+              keyRef.current = null
+              targetDeclaration.retry()
+              try { sessionStorage.removeItem('app-depot-server-import') } catch { /* Browser storage is optional. */ }
+            }
+            throw new Error(problem?.title || 'Server import failed.')
           }
           if (update.result) completed = update.result
         }
@@ -233,7 +253,7 @@ export function ServerImportPage({ target, mode, onBusyChange }: { target: Inges
           <div className="form-actions">
             <button type="button" className="button button-secondary" disabled={busy || analyzing || !path} onClick={() => navigateDirectory(path.split('/').slice(0, -1).join('/'))}>Up one directory</button>
             <span>Location: /{path || ''}</span>
-            {directory && <button type="button" className="button button-secondary" disabled={busy || analyzing} onClick={() => { setSelected({ path, type: 'Directory', size: null }); setAnalysis(undefined); setSetup(''); setHints(emptyHints) }}>Select this directory</button>}
+            {directory && <button type="button" className="button button-secondary" disabled={busy || analyzing} onClick={() => { setSelected({ path, type: 'Directory', size: null }); setAnalysis(undefined); setSetup(''); setHints(emptyHints); setLaunch(undefined) }}>Select this directory</button>}
           </div>
           {loading ? <LoadingState label="Reading source directory…" /> : browseError ? <ProblemNotice error={browseError} /> :
             <table><thead><tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Size</th></tr></thead><tbody>
@@ -258,9 +278,9 @@ export function ServerImportPage({ target, mode, onBusyChange }: { target: Inges
             </select></label>}
             <button type="button" className="button button-secondary" disabled={busy || analyzing || (analysis !== undefined && analysis.candidates.length > 1 && !setup)} onClick={() => void analyze()}>Analyze installer</button>
             {analyzing && <><p role="status">Checking installer metadata and verifying data volumes…</p><progress aria-label="Installer analysis in progress" /></>}
-            {analysis?.analysis && <InstallerReview report={analysis.analysis} hints={hints} change={setHints} busy={busy || analyzing} />}
+            {analysis?.analysis && <InstallerReview report={analysis.analysis} hints={hints} change={setHints} launch={launch} setLaunch={setLaunch} platforms={launchPlatforms} busy={busy || analyzing} />}
           </>}
-          <div className="form-actions"><button className="button button-secondary" value="draft" disabled={busy || analyzing || !!result || !selected || (gog && !analysis?.analysisId) || (target === 'new-app' && !name.trim())}>Import and save Draft</button>
+          <div className="form-actions"><button className="button button-secondary" value="draft" disabled={busy || analyzing || !!result || !selected || (gog && (!analysis?.analysisId || (launch && !launchPlatforms.includes(launch.platform)))) || (target === 'new-app' && !name.trim())}>Import and save Draft</button>
             {canCreate && !gog && <button className="button button-primary" value="publish" disabled={busy || !!result || !selected || (target === 'new-app' && !name.trim())}>Import and publish</button>}
             {(busy || analyzing) && <button type="button" className="button button-danger" onClick={() => void cancel()}>{analyzing ? 'Cancel analysis' : 'Cancel import'}</button>}</div>
         </form>
@@ -280,9 +300,15 @@ export function ServerImportPage({ target, mode, onBusyChange }: { target: Inges
   </>
 }
 
-function InstallerReview({ report, hints, change, busy }: {
-  report: Analysis; hints: ReviewHints; change: (value: ReviewHints) => void; busy: boolean
+function InstallerReview({ report, hints, change, launch, setLaunch, platforms, busy }: {
+  report: Analysis; hints: ReviewHints; change: (value: ReviewHints) => void; launch?: Launch; platforms: string[]; setLaunch: (value?: Launch) => void; busy: boolean
 }) {
+  const directoryId = useId()
+  const [directoryMode, setDirectoryMode] = useState<'target' | 'root' | 'custom'>('target')
+  function resetLaunch(enabled: boolean) {
+    setDirectoryMode('target')
+    setLaunch(enabled && platforms[0] ? { platform: platforms[0], arguments: [] } : undefined)
+  }
   return <fieldset className="form-stack" disabled={busy}>
     <legend>Installer review</legend>
     <dl className="facts">
@@ -303,9 +329,37 @@ function InstallerReview({ report, hints, change, busy }: {
     <p>All recovered files will be kept together as a Tree Artifact. Installation readiness is unknown.</p>
     <label>Product name override<input value={hints.productName} maxLength={255} onChange={event => change({ ...hints, productName: event.target.value })} /></label>
     <label>Game version (optional)<input value={hints.gameVersion} maxLength={255} onChange={event => change({ ...hints, gameVersion: event.target.value })} /></label>
-    <label>Candidate launch file<select value={hints.candidateExecutable} onChange={event => change({ ...hints, candidateExecutable: event.target.value })}>
+    <label>Candidate launch file<select value={hints.candidateExecutable} onChange={event => {
+      change({ ...hints, candidateExecutable: event.target.value })
+      resetLaunch(!!event.target.value)
+    }}>
       <option value="">Leave unspecified</option>{report.candidateExecutables.map(path => <option key={path}>{path}</option>)}
     </select></label>
+    {hints.candidateExecutable && <label className="checkbox-row"><input type="checkbox" checked={!!launch} disabled={!platforms.length && !launch} onChange={event => resetLaunch(event.target.checked)} />Create launch entry point from selected executable</label>}
+    {hints.candidateExecutable && !platforms.length && <p>Declare a Windows platform on the Release to create a launch entry point.</p>}
+    {launch && !platforms.includes(launch.platform) && <p>Choose a supported Windows platform or disable entry point creation.</p>}
+    {launch && <>
+      <label>Windows target platform<select value={launch.platform} onChange={event => setLaunch({ ...launch, platform: event.target.value })}>
+        {!platforms.includes(launch.platform) && <option value={launch.platform} disabled>{launch.platform} (unavailable)</option>}
+        {platforms.map(platform => <option key={platform} value={platform}>{platform === "windows/x86_64" ? "Windows (x86-64)" : "Windows (ARM64)"}</option>)}
+      </select></label>
+      <div>
+        <label htmlFor={directoryId}>Working directory</label>
+        <select id={directoryId} value={directoryMode} onChange={event => {
+          const mode = event.target.value as typeof directoryMode
+          setDirectoryMode(mode)
+          setLaunch({ ...launch, workingDirectory: mode === 'target' ? undefined : '' })
+        }}>
+          <option value="target">Executable folder</option><option value="root">Artifact root</option><option value="custom">Custom directory</option>
+        </select>
+      </div>
+      {directoryMode === 'custom' && <label>Working directory path<input required maxLength={1024} value={launch.workingDirectory || ''} onChange={event => setLaunch({ ...launch, workingDirectory: event.target.value })} /></label>}
+      {launch.arguments.map((argument, index) => <div className="form-actions" key={index}>
+        <label>Launch argument {index + 1}<input maxLength={4096} value={argument} onChange={event => setLaunch({ ...launch, arguments: launch.arguments.map((value, position) => index === position ? event.target.value : value) })} /></label>
+        <button type="button" className="button button-secondary" onClick={() => setLaunch({ ...launch, arguments: launch.arguments.filter((_, position) => index !== position) })}>Remove argument {index + 1}</button>
+      </div>)}
+      <button type="button" className="button button-secondary" disabled={launch.arguments.length >= 64} onClick={() => setLaunch({ ...launch, arguments: [...launch.arguments, ''] })}>Add launch argument</button>
+    </>}
     <label>Installation notes<input value={hints.notes} maxLength={4096} onChange={event => change({ ...hints, notes: event.target.value })} /></label>
   </fieldset>
 }

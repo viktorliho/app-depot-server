@@ -226,3 +226,18 @@ td small { display: block; color: var(--muted); margin-top: 4px; }
 .recipe-targets { display: flex; flex-wrap: wrap; gap: .5rem 1rem; }
 .recipe-panel input[type="checkbox"] { width: auto; margin-right: .35rem; }
 .recipe-layout { max-height: 22rem; overflow: auto; overflow-wrap: anywhere; }
+
+.release-prose {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.artifact-inventory td:first-child {
+  min-width: 12rem;
+  overflow-wrap: anywhere;
+}
+
+.artifact-inventory td:nth-child(2) {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}

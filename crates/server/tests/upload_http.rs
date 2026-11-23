@@ -2909,4 +2909,154 @@ async fn gog_import_recovers_from_interruption_rejects_changed_source_and_commit
             fs::read(entry.path()).unwrap()
         );
     }
+
+    assert!(manifest["data"]["appDepot"].get("entryPoints").is_none());
+    let launch_source = source.with_file_name("launch");
+    fs::create_dir(&launch_source).unwrap();
+    fs::copy(
+        fixtures.join("launch/setup.exe"),
+        launch_source.join("setup.exe"),
+    )
+    .unwrap();
+    let launch_report = http
+        .json(
+            "POST",
+            analysis_path,
+            &[],
+            Some(json!({"rootId":"inbox","path":"launch"})),
+            200,
+        )
+        .0;
+    let candidate = launch_report["analysis"]["candidateExecutables"][0]
+        .as_str()
+        .unwrap();
+    let working_directory = candidate
+        .rsplit_once('/')
+        .map_or("docs".into(), |(parent, _)| format!("{parent}/docs"));
+    let mut launch_input = json!({"rootId":"inbox","path":"launch","mode":"GogOfflineInstaller",
+        "target":{"releaseId":release},"gogReview":{"setup":"setup.exe","analysisId":launch_report["analysisId"],
+        "hints":{"candidateExecutable":"missing.exe"},
+        "entryPoint":{"platform":"windows/x86_64","workingDirectory":working_directory,"arguments":["--windowed mode",""]}}});
+    let result = installer_stream(addr, &http.token, "missing-launch-file", &launch_input)
+        .last()
+        .unwrap();
+    assert_eq!(result["problem"]["code"], "invalid_gog_launch");
+    launch_input["gogReview"]["hints"]["candidateExecutable"] = json!(candidate);
+
+    let mut unsafe_directory = launch_input.clone();
+    unsafe_directory["gogReview"]["entryPoint"]["workingDirectory"] = json!("../outside");
+    let result = installer_stream(
+        addr,
+        &http.token,
+        "unsafe-launch-directory",
+        &unsafe_directory,
+    )
+    .last()
+    .unwrap();
+    assert_eq!(result["problem"]["code"], "invalid_gog_launch");
+
+    let declarations = format!("/releases/{release}/declarations");
+    let set_platforms = |platform: &str| {
+        let etag = response_etag(&http.json("GET", &declarations, &[], None, 200).1);
+        http.json(
+            "PUT",
+            &declarations,
+            &[("If-Match", &etag)],
+            Some(json!({
+                "data":{"appDepot":{"platforms":[platform]}}
+            })),
+            200,
+        );
+    };
+    set_platforms("linux/x86_64");
+    let result = installer_stream(addr, &http.token, "invalid-launch-platform", &launch_input)
+        .last()
+        .unwrap();
+    assert_eq!(
+        result["result"]["problem"]["code"], "gog_launch_platform",
+        "{result}"
+    );
+    let artifacts = format!("/releases/{release}/artifacts");
+    assert_eq!(
+        http.json("GET", &artifacts, &[], None, 200).0["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    set_platforms("windows/x86_64");
+    let result = installer_stream(addr, &http.token, "valid-launch", &launch_input)
+        .last()
+        .unwrap();
+    assert_eq!(result["phase"], "Completed", "{result}");
+    let launch_association = result["result"]["associationId"].as_str().unwrap();
+    let launch_document = http
+        .json(
+            "GET",
+            &format!("/associations/{launch_association}/declarations"),
+            &[],
+            None,
+            200,
+        )
+        .0;
+    let entry = &launch_document["data"]["appDepot"]["entryPoints"][0];
+    assert_eq!(entry["id"], "gog-launch");
+    assert_eq!(entry["platforms"], json!(["windows/x86_64"]));
+    assert_eq!(entry["target"], json!({"type":"TreeFile","path":candidate}));
+    assert_eq!(
+        entry["launch"],
+        json!({"method":"NativePortableV1","workingDirectory":working_directory,"arguments":["--windowed mode",""]})
+    );
+    let check = http
+        .json(
+            "POST",
+            &format!("/associations/{launch_association}/entry-points/validate"),
+            &[],
+            Some(json!({"data":launch_document["data"]})),
+            200,
+        )
+        .0;
+    assert_eq!(check["launchStatus"], "Valid", "{check}");
+
+    let candidate_release = http.create(
+        &format!("/apps/{response}/releases"),
+        json!({"version":"candidate-only"}),
+    );
+    launch_input["target"]["releaseId"] = json!(candidate_release);
+    launch_input["gogReview"]
+        .as_object_mut()
+        .unwrap()
+        .remove("entryPoint");
+    let result = installer_stream(addr, &http.token, "candidate-only", &launch_input)
+        .last()
+        .unwrap();
+    assert_eq!(result["phase"], "Completed", "{result}");
+    assert_eq!(
+        result["result"]["artifactId"],
+        http.json(
+            "GET",
+            &format!("/associations/{launch_association}"),
+            &[],
+            None,
+            200
+        )
+        .0["artifactId"]
+    );
+    let association = result["result"]["associationId"].as_str().unwrap();
+    let candidate_document = http
+        .json(
+            "GET",
+            &format!("/associations/{association}/declarations"),
+            &[],
+            None,
+            200,
+        )
+        .0;
+    let block = &candidate_document["data"]["appDepot"];
+    assert!(block.get("entryPoints").is_none());
+    assert_eq!(
+        block["gogOfflineInstaller"]["user"]["candidateExecutable"],
+        candidate
+    );
 }

@@ -1233,6 +1233,26 @@ impl UploadPort for UploadAdapter {
         .await
         .map_err(db)?
         {
+            let metadata: serde_json::Value = serde_json::from_str(&data).map_err(retry)?;
+            if let Some(platform) = metadata.pointer("/appDepot/entryPoints/0/platforms/0") {
+                let release = crate::declarations::document_in_tx(&mut tx, "Release", &release_id)
+                    .await
+                    .map_err(retry)?;
+                if release
+                    .data
+                    .pointer("/appDepot/platforms")
+                    .is_some_and(|value| {
+                        crate::declarations::platform_list(value).is_none_or(|platforms| {
+                            !platforms.is_empty()
+                                && platform
+                                    .as_str()
+                                    .is_none_or(|name| !platforms.contains(&name))
+                        })
+                    })
+                {
+                    return Err(UploadError::GogLaunchPlatform);
+                }
+            }
             sqlx::query(
                 "UPDATE declaration_revisions SET data_json=? WHERE scope='Association' AND resource_id=?",
             ).bind(data).bind(&association_id).execute(&mut *tx).await.map_err(db)?;
@@ -1342,6 +1362,13 @@ impl UploadPort for UploadAdapter {
             UploadError::NotFound => {
                 self.mark_failed(id, "not_found", "Not found", 404, None)
                     .await
+            }
+            UploadError::GogLaunchPlatform => {
+                self.mark_failed(
+                    id, "gog_launch_platform",
+                    "Select a Windows platform supported by the Release or disable entry point creation.",
+                    409, None,
+                ).await
             }
             UploadError::InvalidZip => {
                 self.mark_failed(id, "invalid_zip", "Invalid ZIP", 422, None)

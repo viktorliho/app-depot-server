@@ -287,6 +287,11 @@ impl From<UploadError> for ApiError {
                 "hash_mismatch",
                 "Hash mismatch",
             ),
+            UploadError::GogLaunchPlatform => (
+                StatusCode::CONFLICT,
+                "gog_launch_platform",
+                "Select a Windows platform supported by the Release or disable entry point creation.",
+            ),
             UploadError::ImmutableRelease => (
                 StatusCode::CONFLICT,
                 "immutable_release",

@@ -1,6 +1,7 @@
+import { depot, fileSize, manifest, record, strings, text } from './release-information'
 import { useEffect, useState } from 'react'
 import { Link, useOutletContext, useParams, useSearchParams } from 'react-router'
-import { apiRequest, idempotencyKey, jsonBody, resource, type Artifact, type Association, type Declaration, type DepotApp, type InventoryEntry, type Page, type Release } from './api'
+import { ApiError, apiRequest, idempotencyKey, jsonBody, resource, type Artifact, type Association, type Declaration, type DepotApp, type InventoryEntry, type Page, type Release } from './api'
 import { EmptyState, LoadingState, PageHeader, ProblemNotice, TechnicalDetails } from './components'
 import { useAuth } from './portal'
 import { useResource } from './use-resource'
@@ -48,6 +49,7 @@ export function ArtifactExplorer() {
   const search = params.get('q') || ''
   const [searchDraft, setSearchDraft] = useState(search)
   const [cursor, setCursor] = useState('')
+  const [previousCursors, setPreviousCursors] = useState<string[]>([])
   const [selected, setSelected] = useState<{ type: 'TreeFile'; path: string } | { type: 'ArtifactFile' } | null>(null)
   const [editingIndex, setEditingIndex] = useState<number | null>(null)
   const [revision, setRevision] = useState(0)
@@ -56,6 +58,8 @@ export function ArtifactExplorer() {
   const [error, setError] = useState<unknown>()
   const [notice, setNotice] = useState('')
   const release = useResource(`explorer-release:${releaseId}`, signal => apiRequest<Release>(`/releases/${enc(releaseId!)}`, { authenticated: true, signal }).then(result => result.value))
+  const releaseDeclaration = useResource(`explorer-release-declaration:${releaseId}`, signal =>
+    apiRequest<Declaration>(`/releases/${enc(releaseId!)}/declarations`, { authenticated: true, signal }).then(result => result.value))
   const association = useResource(`explorer-association:${associationId}`, signal => apiRequest<Association>(`/associations/${enc(associationId!)}`, { authenticated: true, signal }).then(result => result.value))
   const artifactId = association.value?.artifactId
   const artifact = useResource<Artifact>(artifactId ? `explorer-artifact:${artifactId}` : 'waiting-artifact', signal => artifactId ? apiRequest<Artifact>(`/artifacts/${enc(artifactId)}`, { authenticated: true, signal }).then(result => result.value) : new Promise<Artifact>(() => {}))
@@ -64,7 +68,12 @@ export function ArtifactExplorer() {
   const inventory = useResource<Page<InventoryEntry>>(inventoryPath || 'waiting-inventory', signal => inventoryPath ? apiRequest<Page<InventoryEntry>>(inventoryPath, { authenticated: true, signal }).then(result => result.value) : new Promise<Page<InventoryEntry>>(() => {}))
   const validation = useResource<Assessment>(declaration.value ? `entry-assessment:${associationId}:${declaration.value.value.revisionId}` : 'waiting-assessment', signal => declaration.value ? apiRequest<Assessment>(`/associations/${enc(associationId!)}/entry-points/validate`, { method: 'POST', authenticated: true, signal, ...jsonBody({ data: declaration.value.value.data }) }).then(result => result.value) : new Promise<Assessment>(() => {}))
   useEffect(() => { setEntries(readEntries(declaration.value?.value.data) || []) }, [declaration.value?.value.revisionId])
-  useEffect(() => { setCursor('') }, [directory, search])
+  useEffect(() => {
+    if (!release.loading && !association.loading && !artifact.loading && !declaration.loading && window.location.hash === '#entry-points-heading') {
+      document.getElementById('entry-points-heading')?.scrollIntoView()
+    }
+  }, [release.loading, association.loading, artifact.loading, declaration.loading])
+  useEffect(() => { setCursor(''); setPreviousCursors([]) }, [directory, search])
   useEffect(() => { setSearchDraft(search) }, [search])
   const allowed = state.session!.user.serverAdmin || state.session!.user.id === app.ownerId
   const validContext = release.value?.appId === app.id && association.value?.releaseId === releaseId
@@ -79,7 +88,10 @@ export function ArtifactExplorer() {
     const target = selected || (artifact.value?.kind === 'File' ? { type: 'ArtifactFile' as const } : null)
     if (!target) return
     if (editingIndex === null) setEntries(current => [...current, { id: idempotencyKey(), target }])
-    else changeEntry(editingIndex, { target })
+    else {
+      const previous = record(entries[editingIndex]?.target)
+      changeEntry(editingIndex, { target: previous?.type === target.type ? { ...previous, ...target } : target })
+    }
     setSelected(null); setEditingIndex(null)
     document.getElementById('entry-points-heading')?.scrollIntoView({ block: 'start' })
   }
@@ -104,6 +116,21 @@ export function ArtifactExplorer() {
   if (release.error || association.error || artifact.error || declaration.error) return <ProblemNotice error={release.error || association.error || artifact.error || declaration.error} retry={() => { release.retry(); association.retry(); artifact.retry(); declaration.retry() }} />
   if (!validContext) return <ProblemNotice error={new Error('This Artifact association does not belong to the selected Release and application.')} />
   const item = artifact.value!
+  const source = manifest(declaration.value?.value.data)
+  const candidate = text(record(source?.user)?.candidateExecutable)
+  const showCandidate = !!candidate && item.kind === 'Tree' &&
+    strings(record(source?.detected)?.candidateExecutables).includes(candidate) &&
+    !entries.some(entry => record(entry.target)?.path === candidate)
+  const releasePlatforms = strings(depot(releaseDeclaration.value?.data)?.platforms)
+  const windowsTargets = ['windows/x86_64', 'windows/aarch64'].filter(platform => !releasePlatforms.length || releasePlatforms.includes(platform))
+  function useCandidate() {
+    setEntries(current => [...current, {
+      id: current.some(entry => entry.id === 'gog-launch') ? idempotencyKey() : 'gog-launch',
+      label: Array.from(candidate).length <= 160 ? candidate : undefined, target: { type: 'TreeFile', path: candidate },
+      platforms: [windowsTargets[0]], launch: { method: 'NativePortableV1' },
+    }])
+    setNotice('Review the new point and save the declaration to apply it.')
+  }
   const crumbs = directory ? directory.split('/') : []
   return <><PageHeader title={item.kind === 'Tree' ? 'Artifact Explorer' : 'File Artifact'} description={`Original ${item.kind === 'Tree' ? 'directory tree' : 'file'} in ${release.value!.version || 'Unversioned release'}`} />
     <p><Link to={`/apps/${app.id}/releases/${releaseId}`}>← Back to Release</Link></p>
@@ -118,12 +145,21 @@ export function ArtifactExplorer() {
         {!search && <nav aria-label="Artifact path" className="form-actions"><button className="text-button" onClick={() => openDirectory(null)}>Root</button>{crumbs.map((part, index) => <span key={index}> / <button className="text-button" onClick={() => openDirectory(crumbs.slice(0, index + 1).join('/'))}>{part}</button></span>)}</nav>}
         {inventory.loading ? <LoadingState label="Loading directory…" /> : inventory.error ? <ProblemNotice error={inventory.error} retry={inventory.retry} /> : <>
           {!inventory.value!.items.length && <EmptyState title={search ? 'No matching paths' : 'Empty directory'} detail={search ? 'Try another original-path search.' : 'This directory contains no files or folders.'} />}
-          <div className="table-wrap"><table><thead><tr><th>Name</th><th>Size</th><th>Portable executable</th><th>Actions</th></tr></thead><tbody>
+          <div className="table-wrap"><table className="artifact-inventory"><thead><tr><th>Name</th><th>Size</th><th>Type</th><th>Actions</th></tr></thead><tbody>
             {inventory.value!.items.map(entry => <tr key={entry.path}><td>{entry.type === 'Directory' ? <button className="text-button" onClick={() => openDirectory(entry.path)}>📁 {search ? entry.path : entry.path.split('/').pop()}</button> : <span>📄 {search ? entry.path : entry.path.split('/').pop()}</span>}</td>
-              <td>{entry.type === 'File' ? `${entry.size?.toLocaleString() || 0} bytes` : '—'}</td><td>{entry.type === 'File' ? entry.executable ? 'Yes' : 'No' : '—'}</td>
+              <td>{entry.type === 'File' ? fileSize(entry.size) : '—'}</td><td>{entry.type === 'Directory' ? 'Folder' : 'File'}</td>
               <td>{entry.type === 'File' && entry.fileId && <><a href={`/api/v1/artifacts/${enc(item.id)}/files/${enc(entry.fileId)}`} download={entry.path.split('/').pop()}>Download</a>{allowed && <button className="text-button" onClick={() => setSelected({ type: 'TreeFile', path: entry.path })}>Add entry point</button>}</>}
-                <TechnicalDetails><code>{entry.path}</code>{entry.sha256 && <p>SHA-256: <code>{entry.sha256}</code></p>}</TechnicalDetails></td></tr>)}</tbody></table></div>
-          {inventory.value!.nextCursor && <button className="button button-secondary" onClick={() => setCursor(inventory.value!.nextCursor!)}>Next page</button>}
+                <TechnicalDetails><code>{entry.path}</code>{entry.type === 'File' && <p>Executable permission: {entry.executable ? 'Yes' : 'No'}</p>}{entry.sha256 && <p>SHA-256: <code>{entry.sha256}</code></p>}</TechnicalDetails></td></tr>)}</tbody></table></div>
+          <nav className="form-actions" aria-label="Inventory pages">
+            {previousCursors.length > 0 && <button className="button button-secondary" onClick={() => {
+              setCursor(previousCursors.at(-1)!)
+              setPreviousCursors(current => current.slice(0, -1))
+            }}>Previous page</button>}
+            {inventory.value!.nextCursor && <button className="button button-secondary" onClick={() => {
+              setPreviousCursors(current => [...current, cursor])
+              setCursor(inventory.value!.nextCursor!)
+            }}>Next page</button>}
+          </nav>
         </>}
       </>}
       <TechnicalDetails><p>Artifact ID: <code>{item.id}</code></p><p>Association ID: <code>{associationId}</code></p></TechnicalDetails>
@@ -131,6 +167,10 @@ export function ArtifactExplorer() {
     <section className="panel"><h2 id="entry-points-heading">Entry points</h2><p>Optional file references. A valid target does not make a program launchable. Native portable launch is declared separately for a compatible platform and still requires a client's support and your decision to run it.</p>
       {validation.loading ? <LoadingState label="Checking saved references…" /> : validation.error ? <ProblemNotice error={validation.error} retry={validation.retry} /> : validation.value && <p role="status">Saved references: {validation.value.status}{validation.value.items.some(value => value.status !== 'Valid') && ` (${validation.value.items.filter(value => value.status !== 'Valid').map(value => `#${value.index + 1} ${value.status}`).join(', ')})`}</p>}
       {validation.value && <p role="status">Portable launches: {validation.value.launchStatus}{validation.value.selectionRequiredFor.length > 0 && ` · explicit selection required for ${validation.value.selectionRequiredFor.join(', ')}`}</p>}
+      {allowed && structured && showCandidate && !releaseDeclaration.loading && !releaseDeclaration.error && (
+        windowsTargets.length ? <button className="button button-secondary" onClick={useCandidate}>Create entry point from GOG candidate</button> :
+          <p>Declare a supported Windows platform for this release before using the GOG candidate.</p>
+      )}
       {!structured && <p role="alert">This declaration does not use an editable entry-point structure. Its JSON is preserved. Use the raw declaration editor on the Release page.</p>}
         {selected && allowed && structured && <div className="form-actions"><p>Selected: <code>{selected.type === 'TreeFile' ? selected.path : 'This single-file Artifact'}</code></p><button className="button button-primary" onClick={applySelection}>{editingIndex === null ? 'Add entry point' : 'Use selected target'}</button><button className="button button-secondary" onClick={() => { setSelected(null); setEditingIndex(null) }}>Cancel selection</button></div>}
       {editingIndex !== null && !selected && <p role="status">Choose a file above to change entry point {editingIndex + 1}.</p>}
@@ -139,6 +179,13 @@ export function ArtifactExplorer() {
         const launch = object(entry.launch) ? entry.launch : null
         return <div className="form-panel" key={String(entry.id || index)}><h3>Entry point {index + 1}</h3><p>Target: <code>{targetLabel(entry)}</code></p>
         <label>Label (optional)<input value={typeof entry.label === 'string' ? entry.label : ''} readOnly={!allowed} onChange={event => changeEntry(index, { label: event.target.value || undefined })} /></label>
+        {allowed && <label>Add target platform<select value="" onChange={event => {
+          if (event.target.value) changeEntry(index, { platforms: [...strings(entry.platforms), event.target.value] })
+        }}><option value="">Choose a platform</option>
+          {['windows/x86_64', 'windows/aarch64', 'linux/x86_64', 'linux/aarch64', 'macos/x86_64', 'macos/aarch64']
+            .filter(platform => !strings(entry.platforms).includes(platform))
+            .map(platform => <option key={platform}>{platform}</option>)}
+        </select></label>}
         <label>Target operating systems and CPU architectures (one per line; optional)<textarea rows={3} value={Array.isArray(entry.platforms) ? entry.platforms.join('\n') : ''} readOnly={!allowed} placeholder={'linux/x86_64\nwindows/x86_64'} onChange={event => changeEntry(index, { platforms: event.target.value.split('\n').map(s => s.trim()).filter(Boolean) })} /></label>
         {entry.launch !== undefined && (!launch || launch.method !== 'NativePortableV1') ?
           <p role="status">This entry has an unsupported launch declaration. It remains unchanged here; use Advanced JSON to inspect or replace it.</p> : <>
@@ -159,7 +206,14 @@ export function ArtifactExplorer() {
         <TechnicalDetails><code>Entry ID: {String(entry.id)}</code></TechnicalDetails>
         {allowed && <div className="form-actions"><button className="button button-secondary" onClick={() => { setEditingIndex(index); setSelected(null); document.querySelector('[aria-label="Artifact path"]')?.scrollIntoView({ block: 'start' }) }}>Change target using Explorer</button><button className="button button-danger" onClick={() => setEntries(current => current.filter((_, position) => position !== index))}>Remove entry point</button></div>}
       </div>})}
-      {error !== undefined && <ProblemNotice error={error} />}{notice && <p role="status" className="success-notice">{notice}</p>}
+      {error !== undefined && <ProblemNotice error={error} />}
+      {error instanceof ApiError && error.status === 412 && <button className="button button-secondary" onClick={() => {
+        setError(undefined)
+        setNotice('')
+        setSelected(null)
+        setEditingIndex(null)
+        setRevision(value => value + 1)
+      }}>Reload saved entry points</button>}{notice && <p role="status" className="success-notice">{notice}</p>}
       {allowed && structured && <button className="button button-primary" disabled={busy} onClick={() => void save()}>{busy ? 'Saving…' : 'Save entry points'}</button>}
     </section>
   </>

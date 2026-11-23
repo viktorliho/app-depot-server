@@ -1,3 +1,4 @@
+import { depot, fileSize, GogInstallation, ReleaseLaunches, strings, text } from './release-information'
 import { RecipeSection } from './recipes'
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router'
@@ -131,7 +132,7 @@ export function NewRelease() {
   </>
 }
 
-export function DeclarationEditor({ path, editable, title, scope }: { path: string; editable: boolean; title: string; scope: MetadataScope }) {
+export function DeclarationEditor({ path, editable, title, scope, onSaved }: { path: string; editable: boolean; title: string; scope: MetadataScope; onSaved?: () => void }) {
   const { state } = useAuth()
   const current = useResource(`declaration:${path}`, signal => resource<Declaration>(path, signal))
   const [text, setText] = useState('')
@@ -160,7 +161,7 @@ export function DeclarationEditor({ path, editable, title, scope }: { path: stri
     try {
       const saved = await apiRequest<Declaration>(path, { method: 'PUT', authenticated: true, csrf: state.session!.csrfToken,
         ifMatch: current.value!.etag, ...jsonBody({ data }) })
-      setAwaitingRevision(saved.value.revisionId); current.retry(); revisions.retry()
+      setAwaitingRevision(saved.value.revisionId); current.retry(); revisions.retry(); onSaved?.()
     } catch (failure) { setError(failure) } finally { setBusy(false) }
   }
   function save(event: FormEvent) {
@@ -202,24 +203,28 @@ export function AppDeclarations() {
     <DeclarationEditor title="Application data" scope="app" path={`/apps/${app.id}/declarations`} editable={canManage(app, state.session!.user)} /></>
 }
 
-function ArtifactRow({ appId, association, editable, removable, onRemoved }: { appId: string; association: Association; editable: boolean; removable: boolean; onRemoved: (id: string) => void }) {
+function ArtifactRow({ appId, association, label, editable, removable, onRemoved, onSaved }: { appId: string; association: Association; label: string; editable: boolean; removable: boolean; onRemoved: (id: string) => void; onSaved: () => void }) {
   const artifact = useResource(`artifact:${association.artifactId}`, signal => apiRequest<Artifact>(`/artifacts/${enc(association.artifactId)}`, { authenticated: true, signal }).then(result => result.value))
   const current = useResource(`association:${association.id}`, signal => resource<Association>(`/associations/${association.id}`, signal))
   const { state } = useAuth()
   const deleteKey = useRef(idempotencyKey())
+  const [advanced, setAdvanced] = useState(false)
   async function remove() {
     const result = await apiRequest<Operation>(`/associations/${association.id}`, { method: 'DELETE', authenticated: true,
       csrf: state.session!.csrfToken, ifMatch: current.value!.etag, idempotencyKey: deleteKey.current })
     onRemoved(result.value.id)
   }
-  return <section className="panel"><h3>Artifact association</h3>
+  return <section className="panel"><h3>{label || (artifact.value?.kind === 'Tree' ? 'Tree Artifact' : artifact.value?.kind === 'File' ? 'File Artifact' : 'Artifact')}</h3>
     {artifact.loading ? <LoadingState /> : artifact.error ? <ProblemNotice error={artifact.error} retry={artifact.retry} /> : <>
-      <div className="identity-line"><StatusBadge value={artifact.value!.kind} />{artifact.value!.size != null && <span>{artifact.value!.size.toLocaleString()} bytes</span>}</div>
+      <div className="identity-line"><StatusBadge value={artifact.value!.kind} />{artifact.value!.size != null && <span>{fileSize(artifact.value!.size)}</span>}</div>
       <Link className="button button-primary" to={`/apps/${appId}/releases/${association.releaseId}/artifacts/${association.id}`}>Browse files and entry points</Link>
+      {artifact.value!.kind === 'File' && <a className="button button-secondary" href={`/api/v1/artifacts/${enc(artifact.value!.id)}/content`} download>Download file</a>}
       <TechnicalDetails><dl className="facts"><div><dt>Artifact ID</dt><dd><code>{artifact.value!.id}</code></dd></div><div><dt>Association ID</dt><dd><code>{association.id}</code></dd></div></dl></TechnicalDetails>
       {removable && current.value && <div className="section-action"><ConfirmDialog label="Remove association" detail="Remove this Artifact from the Draft release? This revokes the association; immutable content may remain shared elsewhere." confirm="Remove association" onConfirm={remove} /></div>}
     </>}
-    <DeclarationEditor title="Association declarations" scope="association" path={`/associations/${association.id}/declarations`} editable={editable} />
+    <details className="technical-details" onToggle={event => { if (event.currentTarget.open) setAdvanced(true) }}><summary>Advanced association details</summary>
+      {advanced && <DeclarationEditor title="Association declarations" scope="association" path={`/associations/${association.id}/declarations`} editable={editable} onSaved={onSaved} />}
+    </details>
   </section>
 }
 
@@ -240,6 +245,8 @@ export function ReleaseDetail() {
   const [error, setError] = useState<unknown>()
   const [notice, setNotice] = useState('')
   const [operation, setOperation] = useState('')
+  const [advanced, setAdvanced] = useState(false)
+  const [showSnapshot, setShowSnapshot] = useState(false)
   const attempt = useRef<{ id: string; key: string } | null>(null)
   const publishKey = useRef(idempotencyKey())
   const deleteKey = useRef(idempotencyKey())
@@ -277,28 +284,47 @@ export function ReleaseDetail() {
   if (current.loading) return <LoadingState label="Loading release…" />
   if (current.error) return <><PageHeader title="Release unavailable" /><ProblemNotice error={current.error} retry={current.retry} /></>
   if (release!.appId !== app.id) return <ProblemNotice error={new Error('This release does not belong to the selected application.')} />
-  return <><PageHeader title={release!.version || 'Unversioned release'} description={`Release in ${app.name}`} icon={<ArtworkThumbnail app={app} />} actions={mutable && !derived ? <ActionLink to={`/apps/${app.id}/releases/${releaseId}/artifacts/new`}>Add Artifact</ActionLink> : undefined} />
-    <section className="panel"><div className="identity-line"><StatusBadge value={release!.state} /><StatusBadge value={app.visibility} /></div>
-      <p>{derived ? 'Publication fixes the recipe definition. Latest and channel dependencies resolve at request time.' : 'Publication fixes the Artifact composition. Application visibility controls whether Published content is public.'}</p>
-      <TechnicalDetails><code>Release ID: {releaseId}</code></TechnicalDetails></section>
+  const path = `/apps/${app.id}/releases/${releaseId}`
+  const artifactLabels = new Map(snapshot.value?.associations.map(({ associationId, declaration }) =>
+    [associationId, text(depot(declaration.data)?.label)]))
+  const releaseData = depot(snapshot.value?.release.data)
+  const platforms = strings(releaseData?.platforms)
+  const notes = text(releaseData?.notes)
+  const description = text(depot(snapshot.value?.app.data)?.description)
+  return <><PageHeader title={release!.version || 'Unversioned release'} description={`Release in ${app.name}`} icon={<ArtworkThumbnail app={app} />}
+    actions={mutable && !derived ? <div className="form-actions"><ActionLink to={`${path}/artifacts/new`}>Add Artifact</ActionLink>
+      {canPublish && <button className="button button-primary" onClick={() => void publish()} disabled={busy}>Publish release</button>}</div> : undefined} />
+    <div className="identity-line"><StatusBadge value={release!.state} /><StatusBadge value={app.visibility} /></div>
+    {mutable && !canPublish && <p className="subtle">Publish permission is required to publish.</p>}
     {error !== undefined && <ProblemNotice error={error} />}{notice && <Notice text={notice} />}{operation && <OperationNotice id={operation} />}
-    {mutable && <section className="panel form-panel"><h2>Draft release</h2><form className="form-stack" onSubmit={updateVersion}>
-      <label>Version (optional)<input value={version} onChange={event => setVersion(event.target.value)} /></label><button className="button button-secondary" disabled={busy}>Save version</button></form>
-      {!derived && <div className="form-actions section-action"><ActionLink to={`/apps/${app.id}/releases/${releaseId}/artifacts/new`} secondary>Add Artifact</ActionLink>
-        {canPublish && <button className="button button-primary" onClick={() => void publish()} disabled={busy}>Publish release</button>}</div>}
-      {!canPublish && <p className="subtle">Current Publish permission is required to publish.</p>}</section>}
+    {snapshot.loading ? <LoadingState label="Loading release declarations…" /> : snapshot.error ? <ProblemNotice error={snapshot.error} retry={snapshot.retry} /> :
+      <section className="panel"><h2>Supported platforms</h2><p>{platforms.join(', ') || 'No release-wide platforms declared.'}</p></section>}
     {derived && <RecipeSection key={release!.id + release!.state} appId={app.id} release={release!} editable={!!mutable} canPublish={canPublish} onChange={current.retry} onSaved={updated => { recipeEtag.current = { original: current.value?.etag, updated } }} />}
-    <DeclarationEditor title="Release declarations" scope="release" path={`/releases/${releaseId}/declarations`} editable={allowed} />
     {!derived && <section className="panel"><h2>Contents / Artifacts</h2><p>Browse original files, download content and manage entry points for each Artifact.</p>{associations.loading ? <LoadingState /> : associations.error ? <ProblemNotice error={associations.error} retry={associations.retry} /> : <>
       {!associations.value!.items.length && <EmptyState title="No Artifacts associated" detail="Upload or associate an Artifact before publishing." />}
       {associations.value!.items.length === 1 && !associations.value!.nextCursor && <p><Link className="button button-primary" to={`/apps/${app.id}/releases/${releaseId}/artifacts/${associations.value!.items[0].id}`}>Explore content</Link></p>}
-      {associations.value!.items.map(item => <ArtifactRow key={item.id} appId={app.id} association={item} editable={allowed} removable={!!mutable} onRemoved={id => { setOperation(id); setRefresh(value => value + 1); current.retry() }} />)}
+      {associations.value!.items.map(item => <ArtifactRow key={item.id} appId={app.id} association={item} label={artifactLabels.get(item.id) || ''} editable={allowed} onSaved={snapshot.retry} removable={!!mutable} onRemoved={id => { setOperation(id); setRefresh(value => value + 1); current.retry() }} />)}
       {associations.value!.nextCursor && <button className="button button-secondary" onClick={() => setCursor(associations.value!.nextCursor!)}>Next Artifacts page</button>}
     </>}</section>}
-    {mutable && !derived && <section className="panel form-panel"><h2>Associate an existing Artifact</h2><p>Enter the identity of an Artifact already accessible to your account. Registration does not publish the Release.</p>
-      <form className="form-stack" onSubmit={associate}><label>Artifact ID<input value={artifactId} onChange={event => setArtifactId(event.target.value)} required placeholder="adfile:sha256:… or adtree:v1:sha256:…" /></label><button className="button button-secondary" disabled={busy || !artifactId.trim()}>Associate Artifact</button></form></section>}
-    <section className="panel"><h2>Combined declaration snapshot</h2>{snapshot.loading ? <LoadingState /> : snapshot.error ? <ProblemNotice error={snapshot.error} retry={snapshot.retry} /> : <pre className="json-preview">{JSON.stringify(snapshot.value, null, 2)}</pre>}</section>
-    {allowed && <section className="panel"><h2>Permanent deletion</h2><p>Deleting this Release revokes access and starts asynchronous cleanup. This cannot be undone.</p><ConfirmDialog label="Delete release" detail="Permanently delete this Release and its Artifact associations? Shared immutable content may remain available through other releases." confirm="Delete release" onConfirm={remove} /></section>}
+    {snapshot.value && !derived && <><ReleaseLaunches snapshot={snapshot.value} path={path} editable={allowed} /><GogInstallation snapshot={snapshot.value} path={path} /></>}
+    {snapshot.value && <section className="panel"><h2>Release notes and description</h2>
+      {notes && <p className="release-prose">{notes}</p>}{description && <p className="release-prose">{description}</p>}
+      {!notes && !description && <p>No notes or description provided.</p>}
+    </section>}
+    <details className="panel technical-details" onToggle={event => { if (event.currentTarget.open) setAdvanced(true) }}><summary>Advanced release details</summary>
+      {advanced && <>
+        <TechnicalDetails><code>Release ID: {releaseId}</code></TechnicalDetails>
+        {mutable && <section className="panel form-panel"><h2>Draft release metadata</h2><form className="form-stack" onSubmit={updateVersion}>
+          <label>Version (optional)<input value={version} onChange={event => setVersion(event.target.value)} /></label><button className="button button-secondary" disabled={busy}>Save version</button></form></section>}
+        <DeclarationEditor title="Release declarations" scope="release" path={`/releases/${releaseId}/declarations`} editable={allowed} onSaved={snapshot.retry} />
+        {mutable && !derived && <section className="panel form-panel"><h2>Associate an existing Artifact</h2><p>Enter the identity of an Artifact already accessible to your account. Registration does not publish the Release.</p>
+          <form className="form-stack" onSubmit={associate}><label>Artifact ID<input value={artifactId} onChange={event => setArtifactId(event.target.value)} required placeholder="adfile:sha256:… or adtree:v1:sha256:…" /></label><button className="button button-secondary" disabled={busy || !artifactId.trim()}>Associate Artifact</button></form></section>}
+        <details className="technical-details" onToggle={event => setShowSnapshot(event.currentTarget.open)}><summary>Combined declaration snapshot</summary>
+          {showSnapshot && snapshot.value && <pre className="json-preview">{JSON.stringify(snapshot.value, null, 2)}</pre>}
+        </details>
+        {allowed && <section className="panel"><h2>Permanent deletion</h2><p>Deleting this Release revokes access and starts asynchronous cleanup. This cannot be undone.</p><ConfirmDialog label="Delete release" detail="Permanently delete this Release and its Artifact associations? Shared immutable content may remain available through other releases." confirm="Delete release" onConfirm={remove} /></section>}
+      </>}
+    </details>
   </>
 }
 

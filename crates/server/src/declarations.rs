@@ -371,25 +371,6 @@ impl LaunchAssessment {
     }
 }
 
-fn platform_list(value: &Value) -> Option<Vec<&str>> {
-    let items = value.as_array()?;
-    if items.len() > 32 {
-        return None;
-    }
-    let mut seen = HashSet::new();
-    items
-        .iter()
-        .map(|item| {
-            let name = item.as_str()?;
-            (name.chars().count() <= 80
-                && !name.is_empty()
-                && !name.chars().any(char::is_control)
-                && seen.insert(name))
-            .then_some(name)
-        })
-        .collect()
-}
-
 async fn assess_launch(
     pool: &sqlx::SqlitePool,
     artifact_id: &str,
@@ -416,7 +397,7 @@ async fn assess_launch(
             Some("TargetNotValid"),
         ));
     }
-    let Some(entry_platforms) = entry.get("platforms").and_then(platform_list) else {
+    let Some(entry_platforms) = entry.get("platforms").and_then(storage::platform_list) else {
         return Ok(LaunchAssessment::new(
             "Invalid",
             Some("MissingOrMalformedPlatforms"),
@@ -429,7 +410,7 @@ async fn assess_launch(
         ));
     }
     let release_platforms = match release_platforms {
-        Some(value) => match platform_list(value) {
+        Some(value) => match storage::platform_list(value) {
             Some(items) => Some(items),
             None => {
                 return Ok(LaunchAssessment::new(

@@ -67,6 +67,8 @@ struct GogReview {
     analysis_id: String,
     #[serde(default)]
     hints: gog::Hints,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    entry_point: Option<gog::EntryPoint>,
 }
 
 #[derive(Deserialize)]
@@ -526,7 +528,8 @@ async fn run_import(
                 return Err(gog::Error::Changed);
             }
             let (root, scan) = work.extract(&report, &listed, &flag)?;
-            let manifest = gog::declaration(report, &review.hints, &scan)?;
+            let manifest =
+                gog::declaration(report, &review.hints, &scan, review.entry_point.as_ref())?;
             Ok((work, root, scan, manifest))
         })
         .await

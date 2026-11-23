@@ -260,6 +260,8 @@ pub enum UploadError {
     },
     #[error("immutable release")]
     ImmutableRelease,
+    #[error("GOG entry point conflicts with release platforms")]
+    GogLaunchPlatform,
     #[error("idempotency conflict")]
     IdempotencyConflict,
     #[error("invalid cursor")]
@@ -842,7 +844,8 @@ impl<P: UploadPort> UploadCoordinator<P> {
             Err(
                 reason @ (UploadError::NotFound
                 | UploadError::Forbidden
-                | UploadError::ImmutableRelease),
+                | UploadError::ImmutableRelease
+                | UploadError::GogLaunchPlatform),
             ) => self.port.fail_precommit(id, reason).await?,
             Err(error) => {
                 if let Some(result) = self.port.result(id).await? {

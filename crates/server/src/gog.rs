@@ -25,6 +25,7 @@ const ENGINE: &str = "/usr/bin/innoextract";
 #[derive(Debug)]
 pub enum Error {
     Source,
+    Launch,
     Changed,
     MissingVolume,
     InvalidVolume,
@@ -40,6 +41,10 @@ impl Error {
             Self::Source => (
                 "invalid_gog_source",
                 "Select a directory and a regular setup EXE.",
+            ),
+            Self::Launch => (
+                "invalid_gog_launch",
+                "Select a listed Windows EXE, an existing working directory and valid literal arguments.",
             ),
             Self::Changed => (
                 "source_changed",
@@ -705,7 +710,15 @@ fn executables<T: AsRef<str> + Ord>(paths: &BTreeSet<T>) -> BTreeSet<String> {
     paths
         .iter()
         .map(AsRef::as_ref)
-        .filter(|path| !path.contains('/') && path.to_ascii_lowercase().ends_with(".exe"))
+        .filter(|path| {
+            path.to_ascii_lowercase().ends_with(".exe")
+                && !path.split('/').any(|part| {
+                    matches!(
+                        part.to_ascii_lowercase().as_str(),
+                        "__redist" | "redist" | "_commonredist"
+                    )
+                })
+        })
         .take(128)
         .map(str::to_owned)
         .collect()
@@ -717,32 +730,78 @@ pub fn analysis_id(report: &Analysis) -> String {
     ))
 }
 
-pub fn declaration(report: Analysis, hints: &Hints, scan: &Scan) -> Result<Value, Error> {
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EntryPoint {
+    platform: String,
+    working_directory: Option<String>,
+    #[serde(default)]
+    arguments: Vec<String>,
+}
+
+pub fn declaration(
+    report: Analysis,
+    hints: &Hints,
+    scan: &Scan,
+    launch: Option<&EntryPoint>,
+) -> Result<Value, Error> {
     let paths: BTreeSet<_> = scan
         .files
         .iter()
         .map(|file| file.logical_path.as_str())
         .collect();
-    if !hints.candidate_executable.is_empty()
-        && !paths.contains(hints.candidate_executable.as_str())
-    {
-        return Err(Error::Source);
+    let candidates = executables(&paths);
+    let target = &hints.candidate_executable;
+    if !target.is_empty() && !paths.contains(target.as_str()) {
+        return Err(Error::Launch);
     }
-    Ok(
-        json!({"appDepot":{"label":"Recovered offline installer payload","gogOfflineInstaller":{
-            "version":1,
-            "analysis":report,
-            "detected":{
-                "platformFamily":"windows",
-                "evidence":"InnoSetup and file names",
-                "redistributableRoots":redistributables(&paths),
-                "candidateExecutables":executables(&paths),
-            },
-            "user":hints,
-            "payload":{"kind":"Tree","root":"","fileCount":scan.files.len(),"size":scan.total_bytes},
-            "installReadiness":"Unknown"
-        }}}),
-    )
+    let reviewed_candidate = report.candidate_executables.contains(target);
+    let mut data = json!({"appDepot":{"label":"Recovered offline installer payload","gogOfflineInstaller":{
+        "version":1,
+        "analysis":report,
+        "detected":{
+            "platformFamily":"windows",
+            "evidence":"InnoSetup and file names",
+            "redistributableRoots":redistributables(&paths),
+            "candidateExecutables":candidates,
+        },
+        "user":hints,
+        "payload":{"kind":"Tree","root":"","fileCount":scan.files.len(),"size":scan.total_bytes},
+        "installReadiness":"Unknown"
+    }}});
+    if let Some(launch) = launch {
+        if !reviewed_candidate
+            || !candidates.contains(target)
+            || !matches!(
+                launch.platform.as_str(),
+                "windows/x86_64" | "windows/aarch64"
+            )
+            || launch.working_directory.as_ref().is_some_and(|path| {
+                !path.is_empty() && (!safe_path(path) || !scan.directories.contains(path))
+            })
+            || launch.arguments.len() > 64
+            || launch.arguments.iter().map(String::len).sum::<usize>() > 16384
+            || launch
+                .arguments
+                .iter()
+                .any(|arg| arg.len() > 4096 || arg.chars().any(char::is_control))
+        {
+            return Err(Error::Launch);
+        }
+        let mut method = json!({"method":"NativePortableV1", "arguments":launch.arguments});
+        if let Some(directory) = &launch.working_directory {
+            method["workingDirectory"] = json!(directory);
+        }
+        let mut entry = json!({
+            "id":"gog-launch", "target":{"type":"TreeFile","path":target},
+            "platforms":[launch.platform], "launch":method
+        });
+        if target.chars().count() <= 160 {
+            entry["label"] = json!(target);
+        }
+        data["appDepot"]["entryPoints"] = json!([entry]);
+    }
+    Ok(data)
 }
 
 #[cfg(test)]
@@ -798,7 +857,7 @@ mod tests {
             assert!(!scan.files.is_empty());
             assert_eq!(scan.files.len(), listed.len());
             assert!(scan.files.iter().all(|file| file.sha256.len() == 64));
-            let manifest = declaration(report, &Hints::default(), &scan).unwrap();
+            let manifest = declaration(report, &Hints::default(), &scan, None).unwrap();
             assert_eq!(
                 manifest["appDepot"]["gogOfflineInstaller"]["installReadiness"],
                 "Unknown"

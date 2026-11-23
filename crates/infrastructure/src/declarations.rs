@@ -206,7 +206,7 @@ pub async fn snapshot(
     Ok((output, validator))
 }
 
-async fn document_in_tx(
+pub(crate) async fn document_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     scope: &str,
     id: &str,
@@ -217,6 +217,26 @@ async fn document_in_tx(
         revision_id: row.try_get("revision_id")?,
         data: serde_json::from_str(&row.try_get::<String, _>("data_json")?)?,
     })
+}
+
+/// Parses the platform array used by NativePortableV1.
+pub fn platform_list(value: &serde_json::Value) -> Option<Vec<&str>> {
+    let items = value.as_array()?;
+    if items.len() > 32 {
+        return None;
+    }
+    let mut seen = std::collections::HashSet::new();
+    items
+        .iter()
+        .map(|item| {
+            let name = item.as_str()?;
+            (name.chars().count() <= 80
+                && !name.is_empty()
+                && !name.chars().any(char::is_control)
+                && seen.insert(name))
+            .then_some(name)
+        })
+        .collect()
 }
 
 #[cfg(test)]
