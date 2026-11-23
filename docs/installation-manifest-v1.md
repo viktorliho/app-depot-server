@@ -49,7 +49,7 @@ The v1 execution policy is prepare payload first, then offer all applicable expl
 
 The optional Standard `launch` selects `associationId`, `entryPointId`, exact Association declaration `revisionId` and installed `destination`. The winning destination must come from that point's exact Artifact file. Its arguments and supported platforms come from the existing `NativePortableV1` point. A nonmatching platform has no selected launch. `workingDirectory` may explicitly override the installed directory. Otherwise the point's declared directory is interpreted relative to the installation root, or the installed executable's parent when omitted. A nonempty directory must exist. For non-Windows launch, a selected standalone File target is made executable in the installation plan, consistent with NativePortableV1 preparation. A Tree target needs its preserved executable attribute. Without this selection, ordinary Association launch declarations remain available to consumers under their existing contract. Server platform tokens specify targets, not a Wine, Proton or other runtime requirement.
 
-A Derived manifest uses `recipePayload:true`, plus optional unresolved notes. In v1 its payload, choices, prerequisites and launch selection are absent or empty. The resolver returns the existing RecipeV1 lock under `recipe` and preserves its authorization, platform and composition semantics. V1 does not expose dependency Artifacts as Release associations or provide an additional dependency selector.
+A Derived manifest uses `recipePayload:true`, plus optional unresolved notes. In v1 its payload, choices, prerequisites and launch selection are absent or empty. It can carry descriptive localization. The resolver returns the existing RecipeV1 lock under `recipe` and preserves its authorization, platform and composition semantics. V1 does not expose dependency Artifacts as Release associations or provide an additional dependency selector.
 
 ## Resolve and persist
 
@@ -63,4 +63,25 @@ Record the exact plan and choices, operation status, prerequisite IDs and expect
 
 ## GOG integration
 
-GOG registration seeds an initial whole-Tree Release configuration in the association registration transaction when no configuration already exists and the Release declaration has a compatible object shape. Source metadata and detected content stay under the association's `gogOfflineInstaller` property. A generated Windows launch point can seed a pinned launch selection. Detected file groups and unknown setup actions remain evidence; no language choices or executable prerequisites are inferred. A manager may explicitly seed and save a configuration from already imported GOG content without reimporting or changing published composition. Legacy clients keep reading their existing downloads and known declarations.
+GOG registration seeds an initial whole-Tree Release configuration in the association registration transaction when no configuration already exists and the Release declaration has a compatible object shape. Source metadata and detected content stay under the association's `gogOfflineInstaller` property. A generated Windows launch point can seed a pinned launch selection. Recognized executable prerequisite packages seed the ordered release plan. Detected file groups, unsupported setup actions and uncertain packages remain evidence. Confirmed fixed or bundled localization is descriptive and adds no language choice. A manager may explicitly seed and save a configuration from already imported GOG content without reimporting or changing published composition. Legacy clients keep reading their existing downloads and known declarations.
+
+### Localization packaging
+
+The optional `localization` member describes how the application ships its languages.
+It does not add a version or alter content references.
+
+| Mode | Example | Client behavior |
+| --- | --- | --- |
+| Fixed | `{"mode":"fixed","language":"ru-RU"}` | Display the confirmed language. Install the base payload without prompting. |
+| Bundled | `{"mode":"bundled","languages":["en-US","fr-FR"]}` | Install the complete payload. Let the application handle runtime selection. |
+| Selectable | `{"mode":"selectable"}` | Use the existing single-choice language option and apply the selected file mappings. There must be two or more choices with differing copy rules. |
+| Unknown | `{"mode":"unknown"}` | Language support is unconfirmed. Do not infer a choice. |
+
+Only selectable manifests use a language option group. Component groups can coexist
+with any mode. Language identifiers use the same language-tag syntax as the legacy
+language choices. The Server rejects duplicates ignoring case. A missing member preserves
+legacy option behavior and does not assign a mode to historical revisions.
+The resolution API reports the pinned revision’s localization alongside its selections.
+A future client should prompt only when a language selection changes the resolved files
+for the target platform. Installer UI languages and directory names do not establish
+the application language.

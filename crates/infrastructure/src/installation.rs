@@ -271,10 +271,12 @@ pub async fn resolve(
     let selections = manifest.selections(&input.selections)?;
     if manifest.recipe_payload {
         let recipe = lock_in_tx(&mut tx, actor, release, platform).await?;
-        return Ok(
-            json!({"version":1,"appId":app,"releaseId":release,"revisionId":revision_id,
-            "platform":platform,"selections":selections,"recipe":recipe,"unresolved":manifest.unresolved}),
-        );
+        let mut plan = json!({"version":1,"appId":app,"releaseId":release,"revisionId":revision_id,
+            "platform":platform,"selections":selections,"recipe":recipe,"unresolved":manifest.unresolved});
+        if let Some(localization) = manifest.localization {
+            plan["localization"] = json!(localization);
+        }
+        return Ok(plan);
     }
     let mut layout = Layout::default();
     let mut sources = BTreeMap::new();
@@ -429,11 +431,86 @@ pub async fn resolve(
     } else {
         None
     };
-    Ok(
-        json!({"version":1,"appId":app,"releaseId":release,"revisionId":revision_id,"platform":platform,
+    let mut plan = json!({"version":1,"appId":app,"releaseId":release,"revisionId":revision_id,"platform":platform,
         "selections":selections,"files":files,"directories":directories,"launch":launch,
-        "prerequisites":prerequisites,"unresolved":manifest.unresolved}),
-    )
+        "prerequisites":prerequisites,"unresolved":manifest.unresolved});
+    if let Some(localization) = manifest.localization {
+        plan["localization"] = json!(localization);
+    }
+    Ok(plan)
+}
+
+/// Adapt discovery evidence to the existing generic manifest, without recovering
+/// or inventing a vendor command line. The discovery registry determines order.
+pub fn discovery_prerequisites(
+    report: &Value,
+    association: &str,
+    disabled: Option<&Value>,
+) -> Vec<Value> {
+    let disabled = disabled.and_then(Value::as_array);
+    report
+        .get("packages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .filter_map(|(index, package)| {
+            let path = package.get("path")?.as_str()?;
+            if package["status"] != "ready"
+                || disabled.is_some_and(|paths| paths.iter().any(|value| value == path))
+            {
+                return None;
+            }
+            Some(json!({
+                "id":format!("discovered-{association}-{index}"),
+                "name":package.get("name")?,
+                "associationId":association,
+                "path":path,
+                "platforms":package.get("platforms")?,
+                "arguments":[],
+                "evidence":"Recognized package structure; App Depot fallback order; original arguments and order unknown"
+            }))
+        })
+        .take(32)
+        .collect()
+}
+
+pub fn discovery_notes(report: &Value) -> Vec<String> {
+    let packages = report
+        .get("packages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|package| {
+            let status = package.get("status")?.as_str()?;
+            if matches!(status, "ready" | "duplicate") {
+                return None;
+            }
+            let path = package
+                .get("path")?
+                .as_str()?
+                .chars()
+                .take(200)
+                .collect::<String>();
+            Some(format!(
+                "Discovered {path}: {}",
+                if status == "alternative" {
+                    "Conflicting package alternatives require publisher review"
+                } else {
+                    package.get("evidence")?.as_str()?
+                }
+            ))
+        });
+    report
+        .get("unresolved")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .chain(packages)
+        .take(96)
+        .collect()
 }
 
 /// Seed a Release configuration during registration when the publisher has no existing configuration.
@@ -468,7 +545,10 @@ pub(crate) async fn seed_gog(
     {
         unresolved.extend(actions.iter().filter_map(Value::as_str).map(str::to_owned));
     }
-    if let Some(paths) = source
+    let discovery = source.pointer("/detected/installationDiscovery");
+    if let Some(report) = discovery {
+        unresolved.extend(discovery_notes(report));
+    } else if let Some(paths) = source
         .pointer("/detected/redistributableRoots")
         .and_then(Value::as_array)
     {
@@ -490,11 +570,36 @@ pub(crate) async fn seed_gog(
     } else {
         None
     };
-    let value = json!({"version":1,"payload":[{"associationId":association,"destination":"",
+    let prerequisites = discovery
+        .map(|report| {
+            discovery_prerequisites(
+                report,
+                association,
+                source.pointer("/user/disabledPrerequisites"),
+            )
+        })
+        .unwrap_or_default();
+    let localization = if let Some(tag) = source
+        .pointer("/user/confirmedLocale")
+        .and_then(Value::as_str)
+    {
+        json!({"mode":"fixed","language":tag})
+    } else if let Some(languages) = source
+        .pointer("/user/confirmedBundledLocales")
+        .and_then(Value::as_array)
+    {
+        json!({"mode":"bundled","languages":languages})
+    } else {
+        json!({"mode":"unknown"})
+    };
+    let mut value = json!({"version":1,"payload":[{"associationId":association,"destination":"",
         "platforms":["windows/x86_64","windows/aarch64"]}],"unresolved":unresolved,"launch":launch});
+    if !prerequisites.is_empty() {
+        value["prerequisites"] = json!(prerequisites);
+    }
+    value["localization"] = localization;
     // GOG has a broader source path contract. A generic Launch selection is optional
     // when the recovered path is beyond the installation contract's limits.
-    let mut value = value;
     if parse(&value).is_err() {
         value["launch"] = Value::Null;
     }
@@ -502,4 +607,24 @@ pub(crate) async fn seed_gog(
     depot.insert("installation".into(), value);
     crate::declarations::append(tx, "Release", release, &data).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod discovery_tests {
+    use super::*;
+
+    #[test]
+    fn disabling_one_package_preserves_remaining_order_and_excludes_alternatives() {
+        let report = json!({"packages":[
+            {"path":"dx.exe","name":"DirectX","platforms":["windows/x86_64"],"status":"ready"},
+            {"path":"vc.exe","name":"Visual C++","platforms":["windows/x86_64"],"status":"ready"},
+            {"path":"physx.exe","name":"PhysX","platforms":["windows/x86_64"],"status":"alternative"}
+        ]});
+        let baseline = discovery_prerequisites(&report, "association", None);
+        assert_eq!(baseline.len(), 2);
+        let result = discovery_prerequisites(&report, "association", Some(&json!(["dx.exe"])));
+        assert_eq!(result, baseline[1..]);
+        assert_eq!(result[0]["arguments"], json!([]));
+        assert!(discovery_notes(&report)[0].contains("Conflicting package alternatives"));
+    }
 }

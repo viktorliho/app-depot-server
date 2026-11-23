@@ -69,6 +69,12 @@ struct GogReview {
     hints: gog::Hints,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     entry_point: Option<gog::EntryPoint>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    disabled_prerequisites: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    confirmed_locale: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    confirmed_bundled_locales: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -79,7 +85,7 @@ struct AnalysisRequest {
     setup: Option<String>,
 }
 
-struct CancelOnDrop(Arc<AtomicBool>);
+pub(crate) struct CancelOnDrop(pub(crate) Arc<AtomicBool>);
 
 impl Drop for CancelOnDrop {
     fn drop(&mut self) {
@@ -142,9 +148,10 @@ async fn analyze_gog(
             None => return Ok(serde_json::json!({"candidates": candidates, "analysis": null, "analysisId": null})),
         };
         let (work, volumes) = gog::Work::prepare(&state.gog_scratch, &root, &input.path, &setup, &flag)?;
-        let (analysis, _) = work.inspect(setup, volumes, &flag, true)?;
+        let (analysis, paths) = work.inspect(setup, volumes, &flag, true)?;
+        let proposal = work.discovery_preview(&analysis, &paths, &flag)?;
         let id = state.auth.sign_import_analysis(&review_binding(&principal, &root, &input.path, &analysis));
-        Ok(serde_json::json!({"candidates": candidates, "analysis": analysis, "analysisId": id}))
+        Ok(serde_json::json!({"candidates": candidates, "analysis": analysis, "analysisId": id, "proposal": proposal}))
     }).await.map_err(|_| ApiError::server())?.map_err(gog_error)?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(result)).into_response())
 }
@@ -353,7 +360,20 @@ async fn start(
         ("GogOfflineInstaller", Some(review))
             if review.analysis_id.len() == 64
                 && review.analysis_id.bytes().all(|b| b.is_ascii_hexdigit())
-                && review.hints.valid() => {}
+                && review.hints.valid()
+                && review.disabled_prerequisites.len() <= 64
+                && review
+                    .disabled_prerequisites
+                    .iter()
+                    .all(|path| app_depot_domain::recipe::path(path))
+                && (review.confirmed_bundled_locales.is_empty()
+                    || (review.confirmed_locale.is_none()
+                        && app_depot_domain::installation::bundled_languages(
+                            &review.confirmed_bundled_locales,
+                        )))
+                && review.confirmed_locale.as_deref().is_none_or(|tag| {
+                    tag.len() <= 80 && app_depot_domain::installation::language_id(tag)
+                }) => {}
         ("GogOfflineInstaller", _) | (_, Some(_)) => return Err(UploadError::Invalid.into()),
         _ => {}
     }
@@ -397,10 +417,13 @@ async fn start(
         }
     });
     let body = Body::from_stream(stream::unfold(rx, |mut receiver| async {
-        receiver
-            .recv()
-            .await
-            .map(|line| (Ok::<Bytes, Infallible>(Bytes::from(line)), receiver))
+        let body =
+            match tokio::time::timeout(std::time::Duration::from_secs(5), receiver.recv()).await {
+                Ok(Some(line)) => Bytes::from(line),
+                Ok(None) => return None,
+                Err(_) => Bytes::from_static(b": waiting\n\n"),
+            };
+        Some((Ok::<Bytes, Infallible>(body), receiver))
     }));
     let mut response = (StatusCode::OK, body).into_response();
     response.headers_mut().insert(
@@ -528,8 +551,25 @@ async fn run_import(
                 return Err(gog::Error::Changed);
             }
             let (root, scan) = work.extract(&report, &listed, &flag)?;
-            let manifest =
+            let proposal = gog::Work::discovery_import(&report, &root, &scan, &flag);
+            if flag.load(Ordering::Relaxed) {
+                return Err(gog::Error::Cancelled);
+            }
+            let mut manifest =
                 gog::declaration(report, &review.hints, &scan, review.entry_point.as_ref())?;
+            let source = &mut manifest["appDepot"]["gogOfflineInstaller"];
+            source["detected"]["installationDiscovery"] = serde_json::json!(proposal);
+            if !review.disabled_prerequisites.is_empty() {
+                source["user"]["disabledPrerequisites"] =
+                    serde_json::json!(review.disabled_prerequisites);
+            }
+            if let Some(locale) = review.confirmed_locale {
+                source["user"]["confirmedLocale"] = serde_json::json!(locale);
+            }
+            if !review.confirmed_bundled_locales.is_empty() {
+                source["user"]["confirmedBundledLocales"] =
+                    serde_json::json!(review.confirmed_bundled_locales);
+            }
             Ok((work, root, scan, manifest))
         })
         .await

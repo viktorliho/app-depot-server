@@ -33,11 +33,11 @@ Analysis redistributable and executable candidates are selected using the same p
 
 ### Launch entry points
 
-Selecting a review candidate records it in the v1 manifest. The Portal separately offers entry point creation, selected by default after an explicit candidate choice. If requested, the Server validates the exact recovered Tree path, Windows host platform, optional working directory and literal arguments. Registration writes the manifest and the `gog-launch` entry point in one association revision. Identical content retains its existing CAS identity. A candidate is based on the extracted path and extension. It carries no guarantee of executable architecture, required setup actions or successful execution.
+Selecting a review candidate records it in the v1 manifest. The Portal offers entry point creation for a selected candidate. It preselects the suggestion when the package identifies one primary Windows executable, and the publisher may change it or decline entry point creation. If requested, the Server validates the exact recovered Tree path, Windows host platform, optional working directory and literal arguments. Registration writes the manifest and the `gog-launch` entry point in one association revision. Identical content retains its existing CAS identity. A candidate is based on the extracted path and extension. It carries no guarantee of executable architecture, required setup actions or successful execution.
 
 For older manifests, an authorized owner or administrator can open the Artifact Explorer and select **Create entry point from GOG candidate**. Review the prefilled point and explicitly save it. The regular association declaration ETag and validation apply, including for Published Releases. Existing releases and previous revisions are unchanged until the user saves a new revision. Publication still fixes Artifact composition.
 
-This association manifest records source evidence. GOG registration can seed the separate [InstallationManifestV1](installation-manifest-v1.md#gog-integration) Release declaration without inferring language choices or executable prerequisites. Older imports may be configured explicitly without reimporting. The source manifest uses the ordinary editable declaration API. Servers and clients must treat declarations and downloaded payload as untrusted. A client can download and verify the Tree using the existing File/Tree API. Future installation clients must interpret configuration, language selection and prerequisite relationships with explicit user authority and validate paths and content on the target device. The Server runs only the Linux extraction backend. The import does not execute installers, prerequisites, scripts, Wine or Proton.
+This association manifest records source evidence. GOG registration can seed the separate [InstallationManifestV1](installation-manifest-v1.md#gog-integration) Release declaration with recognized executable prerequisites and publisher-confirmed localization. Older imports may be configured explicitly without reimporting. The source manifest uses the ordinary editable declaration API. Servers and clients must treat declarations and downloaded payload as untrusted. A client can download and verify the Tree using the existing File/Tree API. Future installation clients must interpret configuration, language selection and prerequisite relationships with explicit user authority and validate paths and content on the target device. The Server runs only the Linux extraction backend. The import does not execute installers, prerequisites, scripts, Wine or Proton.
 
 ## Isolation and operational limits
 
@@ -48,3 +48,30 @@ The Server allows one installer analyzer or extractor at a time. Limits are 128 
 If installer analysis fails, confirm that all original volumes share the selected setup's name and are complete, and retry on a supported Linux server with enough free space. After cancellation or a source change, perform a new analysis and use a new key. For a connection interruption with unchanged sources, retry the same import request and key. Large watched folders work best when the complete package has finished copying before analysis begins.
 
 The synthetic checks use pinned and hash-verified [innospect test packages](https://github.com/ATRAPSLLC/innospect/tree/2e286a43d30cc4a350e02cf45713552b771b56d4/tests/samples). The format and backend capabilities are documented by [innoextract](https://constexpr.org/innoextract/).
+
+### Installation proposal
+
+Analysis previews installation components from bounded reads of selected extracted files.
+The import checks the analyzed input hashes and reruns discovery on the staged tree
+before registering it. The proposal never runs software and does not filter the
+extracted payload. Evidence and publisher choices remain in the GOG source declaration.
+The release manifest carries the base layout, accepted launch entry point, enabled
+executable prerequisites and confirmed fixed or bundled localization or explicit unknown.
+The publisher can enter a confirmed game language in the Portal independently of
+installer UI languages or language-tagged files.
+
+Recognized EXE packages are enabled by default. The fallback order is DirectX, Visual
+C++ x86, Visual C++ x64, PhysX and OpenAL. This is App Depot policy. Original installer
+ordering and command-line arguments are carried as source observations when recoverable and are never imputed from package recognition. Identical self-contained packages
+use a single installer. Ambiguous alternatives, MSI packages and unclassified helpers
+stay outside the executable sequence. They remain in the recovered payload. Launch
+suggestions can use an unambiguous GOG primary game file task with a verified PE header,
+or a single plausible executable when no primary game task is available.
+
+A bounded read of the package's GOG metadata may recover reported application
+language tags or source setup observations. Tags describe vendor metadata without
+establishing the packaging mode. A publisher can confirm fixed or bundled packaging
+before import. Selectable language overlays can be mapped in Installation Configuration
+after import. Source script observations preserve the order, literal argument text and
+conditions of recognized declarations for review when present. Elevation, registry
+writes and vendor-specific conditions have no automatic V1 execution mapping.

@@ -1,3 +1,4 @@
+import { DiscoveryReview, type DiscoveryReport } from './installation-discovery'
 import { depot, strings } from './release-information'
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react'
 import { useOutletContext, useParams } from 'react-router'
@@ -17,7 +18,7 @@ type Analysis = { setup: string; productName: string; installerVersion: string; 
   volumes: { name: string; size: number; sha256: string }[]; installerLanguages: string[];
   languageTaggedFiles: Record<string, number>; redistributableRoots: string[]; candidateExecutables: string[];
   listedFileCount: number; approximateOutputBytes: number | null; unknownActions: string[] }
-type AnalysisResult = { candidates: string[]; analysis: Analysis | null; analysisId: string | null }
+type AnalysisResult = { proposal?: DiscoveryReport | null; candidates: string[]; analysis: Analysis | null; analysisId: string | null }
 type Launch = { platform: string; workingDirectory?: string; arguments: string[] }
 const windowsPlatforms = ["windows/x86_64", "windows/aarch64"]
 type ReviewHints = { productName: string; gameVersion: string; candidateExecutable: string; notes: string }
@@ -67,6 +68,9 @@ export function ServerImportPage({ target, mode, onBusyChange }: { target: Inges
   const [analyzing, setAnalyzing] = useState(false)
   const [setup, setSetup] = useState('')
   const [hints, setHints] = useState(emptyHints)
+  const [confirmedLocale, setConfirmedLocale] = useState('')
+  const [localizationMode, setLocalizationMode] = useState<'fixed' | 'bundled'>('fixed')
+  const [disabledPrerequisites, setDisabledPrerequisites] = useState<string[]>([])
   const [launch, setLaunch] = useState<Launch>()
   const [name, setName] = useState('')
   const [progress, setProgress] = useState<Progress | null>(null)
@@ -96,9 +100,11 @@ export function ServerImportPage({ target, mode, onBusyChange }: { target: Inges
     return () => signal.abort()
   }, [rootId, path, cursor])
   useEffect(() => () => controller.current?.abort(), [])
+  const reportedLanguages = analysis?.proposal?.sourceObservations?.reportedApplicationLanguages || []
+  const canUseReportedLanguages = localizationMode === 'fixed' ? reportedLanguages.length === 1 : reportedLanguages.length > 1
   const targetValue = useMemo(() => target === 'release' ? { releaseId } : target === 'app'
     ? { appId: app?.id, createRelease: true } : { newAppName: name.trim() }, [target, releaseId, app?.id, name])
-  function navigateDirectory(next: string) { setPath(next); setCursor(''); setPreviousCursors([]); setSelected(null); setAnalysis(undefined); setSetup(''); setHints(emptyHints); setLaunch(undefined) }
+  function navigateDirectory(next: string) { setPath(next); setCursor(''); setPreviousCursors([]); setSelected(null); setAnalysis(undefined); setSetup(''); setHints(emptyHints); setLaunch(undefined); setConfirmedLocale(''); setLocalizationMode('fixed'); setDisabledPrerequisites([]) }
   function choose(entry: Entry) {
     const chosen = path ? `${path}/${entry.name}` : entry.name
     if (entry.entryType === 'Directory') navigateDirectory(chosen)
@@ -116,8 +122,9 @@ export function ServerImportPage({ target, mode, onBusyChange }: { target: Inges
       })
       setAnalysis(value)
       if (!value.analysis?.candidateExecutables.includes(hints.candidateExecutable)) {
-        setHints(current => ({ ...current, candidateExecutable: '' }))
-        setLaunch(undefined)
+        const suggested = value.proposal?.suggestedLaunch || ''
+        setHints(current => ({ ...current, candidateExecutable: suggested }))
+        setLaunch(suggested && launchPlatforms.length ? { platform: launchPlatforms[0], arguments: [] } : undefined)
       }
       if (value.analysis && target === 'new-app') setName(current => current || value.analysis!.productName)
     } catch (problem) {
@@ -132,7 +139,9 @@ export function ServerImportPage({ target, mode, onBusyChange }: { target: Inges
     const publish = !gog && (event.nativeEvent as SubmitEvent).submitter instanceof HTMLButtonElement &&
       (event.nativeEvent as SubmitEvent).submitter?.getAttribute('value') === 'publish'
     const request = { rootId, path: selected.path, mode, target: targetValue,
-      gogReview: gog && analysis?.analysis ? { setup: analysis.analysis.setup, analysisId: analysis.analysisId, hints, entryPoint: hints.candidateExecutable && launch && launchPlatforms.includes(launch.platform) ? launch : undefined } : undefined }
+      gogReview: gog && analysis?.analysis ? { setup: analysis.analysis.setup, analysisId: analysis.analysisId, hints, confirmedLocale: localizationMode === 'fixed' ? confirmedLocale.trim() || undefined : undefined,
+        confirmedBundledLocales: localizationMode === 'bundled' ? confirmedLocale.split(',').map(tag => tag.trim()) : undefined,
+        disabledPrerequisites, entryPoint: hints.candidateExecutable && launch && launchPlatforms.includes(launch.platform) ? launch : undefined } : undefined }
     const fingerprint = JSON.stringify(request)
     const key = keyRef.current?.fingerprint === fingerprint ? keyRef.current.key : storedKey(fingerprint)
     keyRef.current = { fingerprint, key }
@@ -253,7 +262,7 @@ export function ServerImportPage({ target, mode, onBusyChange }: { target: Inges
           <div className="form-actions">
             <button type="button" className="button button-secondary" disabled={busy || analyzing || !path} onClick={() => navigateDirectory(path.split('/').slice(0, -1).join('/'))}>Up one directory</button>
             <span>Location: /{path || ''}</span>
-            {directory && <button type="button" className="button button-secondary" disabled={busy || analyzing} onClick={() => { setSelected({ path, type: 'Directory', size: null }); setAnalysis(undefined); setSetup(''); setHints(emptyHints); setLaunch(undefined) }}>Select this directory</button>}
+            {directory && <button type="button" className="button button-secondary" disabled={busy || analyzing} onClick={() => { setSelected({ path, type: 'Directory', size: null }); setAnalysis(undefined); setSetup(''); setHints(emptyHints); setLaunch(undefined); setConfirmedLocale(''); setLocalizationMode('fixed'); setDisabledPrerequisites([]) }}>Select this directory</button>}
           </div>
           {loading ? <LoadingState label="Reading source directory…" /> : browseError ? <ProblemNotice error={browseError} /> :
             <table><thead><tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Size</th></tr></thead><tbody>
@@ -279,6 +288,20 @@ export function ServerImportPage({ target, mode, onBusyChange }: { target: Inges
             <button type="button" className="button button-secondary" disabled={busy || analyzing || (analysis !== undefined && analysis.candidates.length > 1 && !setup)} onClick={() => void analyze()}>Analyze installer</button>
             {analyzing && <><p role="status">Checking installer metadata and verifying data volumes…</p><progress aria-label="Installer analysis in progress" /></>}
             {analysis?.analysis && <InstallerReview report={analysis.analysis} hints={hints} change={setHints} launch={launch} setLaunch={setLaunch} platforms={launchPlatforms} busy={busy || analyzing} />}
+            {analysis?.analysis && <fieldset disabled={busy || analyzing}><legend>Installation proposal</legend>
+              <label>Application localization<select value={localizationMode} onChange={event => {
+                setLocalizationMode(event.target.value === 'bundled' ? 'bundled' : 'fixed'); setConfirmedLocale('')
+              }}><option value="fixed">Unknown or one confirmed language</option><option value="bundled">Confirmed bundled languages</option></select></label>
+              <label>{localizationMode === 'fixed' ? 'Confirmed application language' : 'Confirmed bundled language identifiers'}
+                <input value={confirmedLocale} required={localizationMode === 'bundled'} maxLength={localizationMode === 'fixed' ? 80 : 2624}
+                  placeholder={localizationMode === 'fixed' ? 'Unknown' : 'en-US,ru-RU'} onChange={event => setConfirmedLocale(event.target.value)} />
+              </label>
+              {canUseReportedLanguages && <button type="button" className="button button-secondary" onClick={() => setConfirmedLocale(reportedLanguages.join(', '))}>
+                Confirm {reportedLanguages.join(', ')}
+              </button>}
+              <p>Use language identifiers such as ru-RU. Leave the single language blank if it is unknown. Configure file-based language choices after import.</p>
+              {analysis.proposal && <DiscoveryReview report={analysis.proposal} disabled={disabledPrerequisites} change={setDisabledPrerequisites} />}
+            </fieldset>}
           </>}
           <div className="form-actions"><button className="button button-secondary" value="draft" disabled={busy || analyzing || !!result || !selected || (gog && (!analysis?.analysisId || (launch && !launchPlatforms.includes(launch.platform)))) || (target === 'new-app' && !name.trim())}>Import and save Draft</button>
             {canCreate && !gog && <button className="button button-primary" value="publish" disabled={busy || !!result || !selected || (target === 'new-app' && !name.trim())}>Import and publish</button>}

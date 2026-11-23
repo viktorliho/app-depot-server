@@ -4035,6 +4035,35 @@ paths:
       security:
       - bearerAuth: []
       - cookieAuth: []
+  /associations/{id}/installation/discover:
+    post:
+      summary: Inspect installation components in a registered Tree Artifact
+      description: Owner or server administrator preview. Does not create a declaration revision.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Proposed prerequisites and unresolved observations
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [report, prerequisites, unresolved]
+                properties:
+                  report: { $ref: '#/components/schemas/InstallationDiscoveryReport' }
+                  prerequisites:
+                    type: array
+                    items: { $ref: '#/components/schemas/InstallationPrerequisiteV1' }
+                  unresolved: { type: array, items: { type: string } }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422':
+          description: Requires a Tree within the discovery inventory limit
+        '429':
+          description: Discovery is busy
   /server-imports/gog/analysis:
     post:
       operationId: analyzeGogOfflineInstaller
@@ -5634,6 +5663,35 @@ components:
       type: string
       enum: [linux/x86_64, linux/aarch64, windows/x86_64, windows/aarch64, macos/x86_64, macos/aarch64]
       description: Exact host OS/architecture token for NativePortableV1. Unknown tokens remain storable but have no v1 match; aliases and case folding are not defined.
+    InstallationLocalizationV1:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [mode]
+          properties:
+            mode: { const: unknown }
+        - type: object
+          additionalProperties: false
+          required: [mode, language]
+          properties:
+            mode: { const: fixed }
+            language: { type: string, maxLength: 80, pattern: '^[A-Za-z][A-Za-z0-9]{0,7}(-[A-Za-z0-9]{1,8})*$' }
+        - type: object
+          additionalProperties: false
+          required: [mode, languages]
+          properties:
+            mode: { const: bundled }
+            languages:
+              type: array
+              minItems: 2
+              maxItems: 32
+              uniqueItems: true
+              items: { type: string, maxLength: 80, pattern: '^[A-Za-z][A-Za-z0-9]{0,7}(-[A-Za-z0-9]{1,8})*$' }
+        - type: object
+          additionalProperties: false
+          required: [mode]
+          properties:
+            mode: { const: selectable }
     InstallationManifestV1:
       type: object
       additionalProperties: false
@@ -5649,6 +5707,8 @@ components:
           type: array
           maxItems: 16
           items: { $ref: '#/components/schemas/InstallationOptionV1' }
+        localization:
+          $ref: '#/components/schemas/InstallationLocalizationV1'
         prerequisites:
           type: array
           maxItems: 32
@@ -5771,6 +5831,8 @@ components:
           additionalProperties:
             type: array
             items: { $ref: '#/components/schemas/InstallationIdentifierV1' }
+        localization:
+          $ref: '#/components/schemas/InstallationLocalizationV1'
         unresolved:
           type: array
           items: { type: string }
@@ -6377,6 +6439,49 @@ components:
         rootId: { type: string }
         path: { type: string }
         setup: { type: [string, 'null'] }
+    InstallationDiscoveryReport:
+      type: object
+      required: [packages, suggestedLaunch, unresolved]
+      properties:
+        suggestedLaunch: { type: [string, 'null'] }
+        unresolved: { type: array, items: { type: string } }
+        packages:
+          type: array
+          items:
+            type: object
+            required: [path, name, family, architecture, platforms, status, evidence, supportingFiles]
+            properties:
+              path: { type: string }
+              name: { type: string }
+              family: { type: string }
+              architecture: { type: string }
+              platforms: { type: array, items: { type: string } }
+              status: { enum: [ready, duplicate, alternative, requiresMsi, unresolved] }
+              evidence: { type: string }
+              supportingFiles: { type: array, items: { type: string } }
+    GogInstallationProposal:
+      allOf:
+        - $ref: '#/components/schemas/InstallationDiscoveryReport'
+        - type: object
+          properties:
+            sourceObservations:
+              type: object
+              required: [reportedApplicationLanguages, setupActions]
+              properties:
+                reportedApplicationLanguages:
+                  type: array
+                  items: { type: string }
+                setupActions:
+                  type: array
+                  items:
+                    type: object
+                    required: [action, target, originalArgumentText, requiresElevation, conditions]
+                    properties:
+                      action: { type: string }
+                      target: { type: [string, 'null'] }
+                      originalArgumentText: { type: [string, 'null'] }
+                      requiresElevation: { type: boolean }
+                      conditions: { type: array, items: { type: string } }
     GogAnalysisResult:
       type: object
       required: [candidates, analysis, analysisId]
@@ -6391,6 +6496,8 @@ components:
           oneOf:
           - $ref: '#/components/schemas/GogAnalysis'
           - type: 'null'
+        proposal:
+          $ref: '#/components/schemas/GogInstallationProposal'
         analysisId:
           type: [string, 'null']
           pattern: '^[0-9a-f]{64}$'
@@ -6481,6 +6588,17 @@ components:
           $ref: '#/components/schemas/GogReviewHints'
         entryPoint:
           $ref: '#/components/schemas/GogEntryPoint'
+        confirmedLocale: { type: string, maxLength: 80, pattern: '^[A-Za-z][A-Za-z0-9]{0,7}(-[A-Za-z0-9]{1,8})*$' }
+        confirmedBundledLocales:
+          type: array
+          minItems: 2
+          maxItems: 32
+          uniqueItems: true
+          items: { type: string, maxLength: 80, pattern: '^[A-Za-z][A-Za-z0-9]{0,7}(-[A-Za-z0-9]{1,8})*$' }
+        disabledPrerequisites:
+          type: array
+          maxItems: 64
+          items: { type: string }
     GogInstallationManifestV1:
       type: object
       description: Initial data.appDepot.gogOfflineInstaller association declaration.
@@ -6503,8 +6621,27 @@ components:
             candidateExecutables:
               type: array
               items: { type: string }
+            installationDiscovery:
+              $ref: '#/components/schemas/GogInstallationProposal'
         user:
-          $ref: '#/components/schemas/GogReviewHints'
+          type: object
+          additionalProperties: false
+          properties:
+            productName: { type: string, maxLength: 255, default: '' }
+            gameVersion: { type: string, maxLength: 255, default: '' }
+            candidateExecutable: { type: string, maxLength: 1024, default: '' }
+            notes: { type: string, maxLength: 4096, default: '' }
+            confirmedLocale: { type: string, maxLength: 80, pattern: '^[A-Za-z][A-Za-z0-9]{0,7}(-[A-Za-z0-9]{1,8})*$' }
+            confirmedBundledLocales:
+              type: array
+              minItems: 2
+              maxItems: 32
+              uniqueItems: true
+              items: { type: string, maxLength: 80, pattern: '^[A-Za-z][A-Za-z0-9]{0,7}(-[A-Za-z0-9]{1,8})*$' }
+            disabledPrerequisites:
+              type: array
+              maxItems: 64
+              items: { type: string }
         payload:
           type: object
           required: [kind, root, fileCount, size]

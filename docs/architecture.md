@@ -129,3 +129,11 @@ The Server is a Rust modular monolith with domain, application, infrastructure a
 ## 16. Future application portability
 
 Future work may export one App, a selected Release and its original Artifacts, current artwork and current App, Release and association declarations as a self-contained logical package. A possible layout has `original/`, `artwork/`, `declarations/` and an integrity and relationship manifest; this is a direction, not a package-format specification. Metadata and artwork work must preserve immutable content-addressed original Artifacts, independently identifiable content-addressed artwork with explicit current references, and portable declarations that do not depend on physical Server paths. The App, Release, Artifact and association remain distinct entities; portable metadata must not depend on local absolute paths, host configuration or Server database IDs. A unified logical package does not require physically duplicating entire App directories. Export, import, snapshot generation and package validation are outside the current scope.
+
+Installation discovery is a bounded reader over staged files or registered Tree
+inventories. The registry combines known filenames, executable or container headers,
+product markers and DirectX companion structure. These observations classify packages
+and do not authenticate publishers or establish installation readiness. Registered
+discovery verifies inspected CAS bytes against inventory digests and proposes generic
+InstallationManifestV1 prerequisites through an owner/admin endpoint. The publisher
+applies them through the existing declaration revision flow.

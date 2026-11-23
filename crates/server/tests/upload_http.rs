@@ -26,7 +26,12 @@ fn request_full(
     body: &[u8],
 ) -> std::io::Result<(u16, Vec<u8>, String)> {
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(500))?;
-    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+    let timeout = if std::env::var_os("OVERLORD_GOG_FIXTURE").is_some() {
+        900
+    } else {
+        5
+    };
+    stream.set_read_timeout(Some(Duration::from_secs(timeout)))?;
     let host = extra
         .iter()
         .find(|(name, _)| name.eq_ignore_ascii_case("Host"))
@@ -2277,7 +2282,7 @@ impl RecipeHttp {
             &headers,
             bytes.as_bytes(),
         )
-        .unwrap();
+        .unwrap_or_else(|error| panic!("{method} {path}: {error}"));
         assert_eq!(
             status,
             expected,
@@ -2508,6 +2513,22 @@ fn exercise_standard_installation(
         plan["unresolved"],
         json!(["Unknown original installer action"])
     );
+    let mut selectable = install.clone();
+    selectable["localization"] = json!({"mode":"selectable"});
+    let explicit_plan = owner
+        .json(
+            "POST",
+            &path,
+            &[],
+            Some(json!({
+                "platform":"windows/x86_64", "manifest":selectable, "selections":choices,
+            })),
+            200,
+        )
+        .0;
+    assert_eq!(explicit_plan["localization"]["mode"], "selectable");
+    assert_eq!(explicit_plan["files"], plan["files"]);
+
     let mut collision = install.clone();
     collision["payload"].as_array_mut().unwrap().push(json!({"associationId":association,"source":"data/resources.dat","destination":"base/resources.dat"}));
     let preview = json!({"platform":"windows/x86_64","manifest":collision,"selections":choices});
@@ -2545,6 +2566,19 @@ fn exercise_standard_installation(
         plan
     );
     (path, request, plan)
+}
+
+fn fake_installer_pe() -> Vec<u8> {
+    let mut data = vec![0; 512];
+    data[..2].copy_from_slice(b"MZ");
+    data[60] = 64;
+    data[64..68].copy_from_slice(b"PE\0\0");
+    data[68..70].copy_from_slice(&0x14cu16.to_le_bytes());
+    data[70] = 1;
+    data[84] = 224;
+    data[86] = 2;
+    data[88..90].copy_from_slice(&0x10bu16.to_le_bytes());
+    data
 }
 
 #[tokio::test]
@@ -2590,6 +2624,42 @@ async fn derived_recipe_lifecycle_resolves_synthetic_artifacts_and_preserves_per
         addr,
         token: String::new(),
     };
+
+    let discovered_app = owner.create("/apps", json!({"name":"Synthetic redistributables"}));
+    let discovered_release = owner.create(
+        &format!("/apps/{discovered_app}/releases"),
+        json!({"version":"1"}),
+    );
+    let input = dir.path().join("inbox/components/redist");
+    fs::create_dir_all(&input).unwrap();
+    let mut exe = fake_installer_pe();
+    exe.extend_from_slice(b"Microsoft Visual C++ Redistributable");
+    fs::write(input.join("vcredist_x86.exe"), exe).unwrap();
+    fs::write(input.join("helper.exe"), b"unknown helper").unwrap();
+    let imported = installer_stream(addr, &owner.token, "detect-components-tree", &json!({
+        "rootId":"inbox","path":"components","mode":"BareTree","target":{"releaseId":discovered_release}
+    })).last().unwrap();
+    assert_eq!(imported["phase"], "Completed", "{imported}");
+    owner.publish(&discovered_release, 200);
+    owner.public(&discovered_app);
+    let discovered_path = format!(
+        "/associations/{}/installation/discover",
+        imported["result"]["associationId"].as_str().unwrap()
+    );
+    reader.json("POST", &discovered_path, &[], None, 404);
+    let discovery_doc = format!("/releases/{discovered_release}/declarations");
+    let before = owner.json("GET", &discovery_doc, &[], None, 200).0;
+    let detection = owner.json("POST", &discovered_path, &[], None, 200).0;
+    assert_eq!(
+        detection["prerequisites"][0]["path"],
+        "redist/vcredist_x86.exe"
+    );
+    assert_eq!(detection["prerequisites"][0]["arguments"], json!([]));
+    assert_eq!(
+        detection["unresolved"],
+        json!(["Unclassified setup executable: redist/helper.exe"])
+    );
+    assert_eq!(owner.json("GET", &discovery_doc, &[], None, 200).0, before);
 
     let game = owner.create("/apps", json!({"name":"Synthetic Windows game"}));
     assert_eq!(
@@ -3299,4 +3369,189 @@ async fn gog_import_recovers_from_interruption_rejects_changed_source_and_commit
     assert!(plan["prerequisites"].as_array().unwrap().is_empty());
     assert_eq!(plan["selections"], json!({}));
     assert_eq!(plan["launch"], Value::Null);
+}
+
+#[tokio::test]
+#[ignore = "local acceptance requires a private installer and available staging disk"]
+async fn private_overlord_discovery_acceptance() {
+    let fixtures = std::path::PathBuf::from(std::env::var_os("OVERLORD_GOG_FIXTURE").unwrap());
+    let scratch = std::path::PathBuf::from(std::env::var_os("OVERLORD_TEST_SCRATCH").unwrap());
+    let dir = tempfile::tempdir_in(scratch).unwrap();
+    let managed = init_local(dir.path(), "crash", LocalMode::Dev).unwrap();
+    let lock = lock_local(dir.path(), "crash", LocalMode::Dev).unwrap();
+    let pool = open_catalog(&lock).await.unwrap();
+    let setup = auth::prepare_setup(&pool).await.unwrap().unwrap();
+    let password = "disposable installer test password";
+    assert!(auth::complete_setup(&pool, &setup, "admin", password)
+        .await
+        .unwrap());
+    let admin = auth::verify_password(&pool, "admin", password)
+        .await
+        .unwrap()
+        .unwrap();
+    let (token, _) = auth::issue_token(&pool, &admin.id).await.unwrap();
+    pool.close().await;
+    drop(lock);
+
+    let source = managed.parent().unwrap().join("inbox/install");
+    fs::create_dir_all(&source).unwrap();
+    let digest = |path: &std::path::Path| {
+        let output = Command::new("sha256sum").arg(path).output().unwrap();
+        assert!(output.status.success());
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .to_owned()
+    };
+    let mut originals = Vec::new();
+    for entry in fs::read_dir(fixtures).unwrap() {
+        let entry = entry.unwrap();
+        let copied = source.join(entry.file_name());
+        let before = digest(&entry.path());
+        fs::copy(entry.path(), &copied).unwrap();
+        originals.push((entry.path(), copied, before));
+    }
+    assert_eq!(originals.len(), 2);
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    let server = start(dir.path(), addr);
+    let http = RecipeHttp { addr, token };
+    let report = http
+        .json(
+            "POST",
+            "/server-imports/gog/analysis",
+            &[],
+            Some(json!({"rootId":"inbox","path":"install"})),
+            200,
+        )
+        .0;
+    let proposal = &report["proposal"];
+    eprintln!(
+        "Launch: {}, packages: {}, unresolved: {}",
+        proposal["suggestedLaunch"],
+        proposal["packages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| format!("{}={}", p["name"], p["status"]))
+            .collect::<Vec<_>>()
+            .join(", "),
+        proposal["unresolved"]
+    );
+    assert_eq!(proposal["suggestedLaunch"], "Overlord2.exe");
+    assert!(proposal["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|p| p["family"] == "visual-cpp-x86" && p["status"] == "ready"));
+    assert!(proposal["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|p| p["family"] == "physx" && p["status"] == "requiresMsi"));
+
+    let input = json!({"rootId":"inbox","path":"install","mode":"GogOfflineInstaller",
+        "target":{"newAppName":"Private fixture acceptance"}, "gogReview":{"setup":report["analysis"]["setup"], "analysisId":report["analysisId"],
+        "confirmedLocale":"ru-RU","hints":{"candidateExecutable":proposal["suggestedLaunch"]},"entryPoint":{"platform":"windows/x86_64"}}});
+    let result = installer_stream(addr, &http.token, "private-fixture-import", &input)
+        .last()
+        .unwrap();
+    assert_eq!(result["phase"], "Completed", "{result}");
+    let release = result["result"]["releaseId"].as_str().unwrap();
+    let artifact = result["result"]["artifactId"].as_str().unwrap();
+    let association = result["result"]["associationId"].as_str().unwrap();
+    let release_path = format!("/releases/{release}");
+    assert_eq!(
+        http.json("GET", &release_path, &[], None, 200).0["state"],
+        "Draft"
+    );
+    let source_manifest = http
+        .json(
+            "GET",
+            &format!("/associations/{association}/declarations"),
+            &[],
+            None,
+            200,
+        )
+        .0;
+    assert_eq!(
+        source_manifest["data"]["appDepot"]["gogOfflineInstaller"]["detected"]
+            ["installationDiscovery"],
+        *proposal
+    );
+    let resolve = || {
+        http.json(
+            "POST",
+            &format!("{release_path}/installation/resolve"),
+            &[],
+            Some(json!({"platform":"windows/x86_64"})),
+            200,
+        )
+        .0
+    };
+    let plan = resolve();
+    assert_eq!(
+        plan["localization"],
+        json!({"mode":"fixed","language":"ru-RU"})
+    );
+    assert_eq!(plan["selections"], json!({}));
+    assert_eq!(plan["launch"]["path"], "Overlord2.exe");
+    assert_eq!(plan["prerequisites"].as_array().unwrap().len(), 1);
+    let files = plan["files"].as_object().unwrap();
+    eprintln!("Registered {} files", files.len());
+    assert_eq!(files.len(), 6023);
+    http.publish(release, 200);
+    eprintln!("Published isolated release");
+    drop(server);
+    let _server = start(dir.path(), addr);
+    assert_eq!(resolve(), plan);
+    eprintln!("Verified pinned installation data after restart");
+    let detected = http
+        .json(
+            "POST",
+            &format!("/associations/{association}/installation/discover"),
+            &[],
+            None,
+            200,
+        )
+        .0;
+    assert_eq!(detected["report"]["packages"], proposal["packages"]);
+    for path in [
+        "Overlord2.exe",
+        "Language.dat",
+        "__redist/MSVC2005/vcredist_x86.exe",
+    ] {
+        let query = path.rsplit('/').next().unwrap();
+        let (listing, _) = http.json(
+            "GET",
+            &format!("/artifacts/{artifact}/inventory?q={query}"),
+            &[],
+            None,
+            200,
+        );
+        let entry = listing["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["path"] == path)
+            .unwrap();
+        let url = format!(
+            "/api/v1/artifacts/{artifact}/files/{}",
+            entry["fileId"].as_str().unwrap()
+        );
+        let (status, content) = request(addr, "GET", &url, &http.token, &[], &[]).unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(
+            hex::encode(Sha256::digest(content)),
+            entry["sha256"].as_str().unwrap()
+        );
+    }
+    eprintln!("Verified three downloaded files");
+    for (original, copy, before) in originals {
+        assert_eq!(digest(&original), before);
+        assert_eq!(digest(&copy), before);
+    }
 }

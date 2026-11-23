@@ -95,7 +95,7 @@ pub struct Copy {
     pub collision: Collision,
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Collision {
     #[default]

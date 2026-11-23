@@ -54,6 +54,8 @@ pub struct Manifest {
     pub payload: Vec<Copy>,
     #[serde(default)]
     pub options: Vec<OptionGroup>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub localization: Option<Localization>,
     #[serde(default)]
     pub prerequisites: Vec<Prerequisite>,
     #[serde(default)]
@@ -63,6 +65,15 @@ pub struct Manifest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "camelCase", deny_unknown_fields)]
+pub enum Localization {
+    Unknown,
+    Fixed { language: String },
+    Bundled { languages: Vec<String> },
+    Selectable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Copy {
     pub association_id: String,
@@ -152,13 +163,26 @@ fn identifier(value: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
-fn language_id(value: &str) -> bool {
+pub fn language_id(value: &str) -> bool {
     value.split('-').all(|part| {
         (1..=8).contains(&part.len()) && part.bytes().all(|b| b.is_ascii_alphanumeric())
     }) && value
         .bytes()
         .next()
         .is_some_and(|b| b.is_ascii_alphabetic())
+}
+
+pub fn bundled_languages(languages: &[String]) -> bool {
+    (2..=32).contains(&languages.len())
+        && languages
+            .iter()
+            .all(|tag| tag.len() <= 80 && language_id(tag))
+        && languages
+            .iter()
+            .map(|tag| tag.to_ascii_lowercase())
+            .collect::<BTreeSet<_>>()
+            .len()
+            == languages.len()
 }
 
 fn label(value: &str, limit: usize) -> bool {
@@ -248,6 +272,28 @@ impl Manifest {
                 return Err(Invalid);
             }
         }
+        let language_group = self.options.iter().find(|group| group.language);
+        let valid_tag = |tag: &str| tag.len() <= 80 && language_id(tag);
+        let valid_localization = match &self.localization {
+            None => true,
+            Some(Localization::Unknown) => language_group.is_none(),
+            Some(Localization::Fixed { language }) => {
+                language_group.is_none() && valid_tag(language)
+            }
+            Some(Localization::Bundled { languages }) => {
+                language_group.is_none() && bundled_languages(languages)
+            }
+            Some(Localization::Selectable) => language_group.is_some_and(|group| {
+                group.choices.len() >= 2
+                    && group
+                        .choices
+                        .windows(2)
+                        .any(|choices| choices[0].payload != choices[1].payload)
+            }),
+        };
+        if !valid_localization {
+            return Err(Invalid);
+        }
         ids.clear();
         for item in &self.prerequisites {
             if !identifier(&item.id)
@@ -328,4 +374,81 @@ fn selection(group: &OptionGroup, selected: &[String]) -> bool {
         && selected
             .iter()
             .all(|id| group.choices.iter().any(|choice| &choice.id == id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn localization_distinguishes_payload_choices_from_supported_languages() {
+        let copy = Copy {
+            association_id: uuid::Uuid::nil().to_string(),
+            source: String::new(),
+            destination: String::new(),
+            collision: Collision::Reject,
+            platforms: vec![],
+        };
+        let mut manifest = Manifest {
+            version: 1,
+            recipe_payload: false,
+            payload: vec![copy.clone()],
+            options: vec![],
+            localization: None,
+            prerequisites: vec![],
+            unresolved: vec![],
+            launch: None,
+        };
+        for localization in [
+            Localization::Unknown,
+            Localization::Fixed {
+                language: "ru-RU".into(),
+            },
+            Localization::Bundled {
+                languages: vec!["en-US".into(), "ru-RU".into()],
+            },
+        ] {
+            manifest.localization = Some(localization);
+            manifest.validate().unwrap();
+            assert!(manifest.selections(&BTreeMap::new()).unwrap().is_empty());
+        }
+        manifest.localization = Some(Localization::Bundled {
+            languages: vec!["en-US".into(), "EN-us".into()],
+        });
+        assert!(manifest.validate().is_err());
+        manifest.localization = Some(Localization::Selectable);
+        manifest.options = vec![OptionGroup {
+            id: "language".into(),
+            name: "Game language".into(),
+            language: true,
+            multiple: false,
+            required: true,
+            defaults: vec![],
+            choices: vec![
+                Choice {
+                    id: "en-US".into(),
+                    name: "English".into(),
+                    payload: vec![],
+                },
+                Choice {
+                    id: "ru-RU".into(),
+                    name: "Russian".into(),
+                    payload: vec![],
+                },
+            ],
+        }];
+        assert!(manifest.validate().is_err());
+        manifest.options[0].choices[1].payload.push(copy);
+        manifest.validate().unwrap();
+        assert!(manifest.selections(&BTreeMap::new()).is_err());
+        assert!(manifest
+            .selections(&BTreeMap::from([("language".into(), vec!["ru-RU".into()])]))
+            .is_ok());
+        manifest.localization = Some(Localization::Fixed {
+            language: "ru-RU".into(),
+        });
+        assert!(manifest.validate().is_err());
+        manifest.localization = None;
+        manifest.validate().unwrap();
+    }
 }

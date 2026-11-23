@@ -73,6 +73,7 @@ dependencies = [
  "hex",
  "hmac",
  "libc",
+ "memchr",
  "rand",
  "serde",
  "serde_json",

@@ -1,3 +1,4 @@
+import { DiscoveryReview, type DiscoveryReport } from './installation-discovery'
 import { useState, type ReactNode } from 'react'
 import { ApiError, apiRequest, jsonBody, resource, type Association, type Declaration, type DeclarationSnapshot, type Page } from './api'
 import { LoadingState, ProblemNotice } from './components'
@@ -12,7 +13,8 @@ type Choice = { id: string; name: string; payload: Copy[] }
 type Group = { id: string; name: string; language?: boolean; multiple?: boolean; required?: boolean; defaults?: string[]; choices: Choice[] }
 type Prerequisite = { id: string; name: string; associationId: string; path?: string; platforms: string[]; arguments?: string[]; optional?: boolean; evidence: string; successExitCodes?: number[]; when?: { optionId: string; choiceId: string } | null }
 type Launch = { associationId: string; revisionId: string; entryPointId: string; destination: string; workingDirectory?: string | null }
-type Manifest = { version: 1; recipePayload?: boolean; payload?: Copy[]; options?: Group[]; prerequisites?: Prerequisite[]; unresolved?: string[]; launch?: Launch | null }
+type Localization = { mode: 'unknown' | 'selectable' } | { mode: 'fixed'; language: string } | { mode: 'bundled'; languages: string[] }
+type Manifest = { localization?: Localization; version: 1; recipePayload?: boolean; payload?: Copy[]; options?: Group[]; prerequisites?: Prerequisite[]; unresolved?: string[]; launch?: Launch | null }
 type Preview = { files?: Record<string, unknown>; directories?: string[]; launch?: { path: string }; prerequisites?: { id: string; name: string; optional: boolean }[]; recipe?: { files: Record<string, unknown>; launch: { path: string }; directories: string[] }; unresolved: string[] }
 type Source = Association & { label: string }
 const emptyCopy = (): Copy => ({ associationId: '', destination: '' })
@@ -71,7 +73,7 @@ function Copies({ copies, sources, update }: { copies: Copy[]; sources: Source[]
   </>
 }
 
-function Options({ groups, sources, update }: { groups: Group[]; sources: Source[]; update: (groups: Group[]) => void }) {
+function Options({ groups, sources, update, allowLanguage }: { allowLanguage: boolean; groups: Group[]; sources: Source[]; update: (groups: Group[]) => void }) {
   const add = (language: boolean) => update([...groups, { id: language ? 'language' : `component-${groups.length + 1}`, name: language ? 'Game language' : 'Optional components', language, multiple: !language, required: language, choices: [] }])
   return <>{groups.map((group, index) => {
     const change = (patch: Partial<Group>) => update(replace(groups, index, { ...group, ...patch }))
@@ -98,7 +100,7 @@ function Options({ groups, sources, update }: { groups: Group[]; sources: Source
     </fieldset>
   })}
   <div className="form-actions">
-    {!groups.some(item => item.language) && <button type="button" className="button button-secondary" onClick={() => add(true)}>Add language choices</button>}
+    {allowLanguage && !groups.some(item => item.language) && <button type="button" className="button button-secondary" onClick={() => add(true)}>Add language choices</button>}
     <button type="button" className="button button-secondary" onClick={() => add(false)}>Add component choices</button>
   </div></>
 }
@@ -153,6 +155,46 @@ function OptionsPreview({ groups, values, update }: { groups: Group[]; values: R
   })}</>
 }
 
+type Detected = { report: DiscoveryReport; prerequisites: Prerequisite[]; unresolved: string[] }
+
+function DetectComponents({ sources, apply }: { sources: Source[]; apply: (id: string, items: Prerequisite[], notes: string[]) => void }) {
+  const { state } = useAuth()
+  const trees = sources.filter(source => source.artifactId.startsWith('adtree:'))
+  const [id, setId] = useState(trees[0]?.id || '')
+  const [detected, setDetected] = useState<Detected>()
+  const [disabled, setDisabled] = useState<string[]>([])
+  const [error, setError] = useState<unknown>()
+  const [busy, setBusy] = useState(false)
+  if (!trees.length) return null
+  async function detect() {
+    setDetected(undefined); setDisabled([]); setError(undefined); setBusy(true)
+    try {
+      const result = await apiRequest<Detected>(`/associations/${encodeURIComponent(id)}/installation/discover`, {
+        method: 'POST', authenticated: true, csrf: state.session!.csrfToken,
+      })
+      setDetected(result.value)
+    } catch (error) {
+      setError(error)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return <details><summary>Detect installation components</summary>
+    <label>Tree Artifact<select disabled={busy} value={id} onChange={event => {
+      setId(event.target.value); setDetected(undefined); setError(undefined)
+    }}>{trees.map(tree => <option value={tree.id} key={tree.id}>{tree.label}</option>)}</select></label>
+    <button type="button" className="button button-secondary" disabled={busy} onClick={() => void detect()}>{busy ? 'Detecting…' : 'Detect components'}</button>
+    {error !== undefined && <ProblemNotice error={error} />}
+    {detected && <>
+      <DiscoveryReview report={detected.report} disabled={disabled} change={setDisabled} />
+      <button type="button" className="button button-secondary" onClick={() => {
+        apply(id, detected.prerequisites.filter(item => !disabled.includes(item.path || '')), detected.unresolved)
+        setDetected(undefined)
+      }}>Apply to installation editor</button>
+    </>}
+  </details>
+}
+
 type EditorProps = { releaseId: string; derived: boolean; snapshot: DeclarationSnapshot; onSaved: () => void }
 function Editor({ releaseId, derived, snapshot, onSaved }: EditorProps) {
   const { state } = useAuth()
@@ -197,6 +239,16 @@ function ConfigurationForm({ releaseId, derived, snapshot, sources, doc, etag, r
   const [error, setError] = useState<unknown>()
   const [busy, setBusy] = useState(false)
   const update = (patch: Partial<Manifest>) => { setForm(form && { ...form, ...patch }); setPreview(undefined) }
+  const discovery = !derived && <DetectComponents key="detect-components" sources={sources} apply={(id, items, notes) => {
+    setForm(current => {
+      const existing: Manifest = current || { version: 1, payload: [{ associationId: id, destination: '' }], localization: { mode: 'unknown' } }
+      const kept = (existing.prerequisites || []).filter(item => !item.id.startsWith(`discovered-${id}-`))
+      return { ...existing, prerequisites: [...kept, ...items.filter(item => !kept.some(previous =>
+        previous.associationId === id && previous.path === item.path))],
+        unresolved: [...new Set([...(existing.unresolved || []), ...notes])] }
+    })
+    setPreview(undefined)
+  }} />
   const legacy = snapshot.associations.find(item => gogManifest(item.declaration.data) && sources.some(source => source.id === item.associationId))
   const legacySource = gogManifest(legacy?.declaration.data)
   const points = snapshot.associations.flatMap(item => {
@@ -233,6 +285,7 @@ function ConfigurationForm({ releaseId, derived, snapshot, sources, doc, etag, r
   }
   if (!form) return <>
     <p>Installation configuration is optional for downloadable releases.</p>
+    {discovery}
     <button type="button" className="button button-secondary" onClick={() => setForm(emptyManifest(derived))}>Configure installation</button>
     {legacy && <button type="button" className="button button-secondary" onClick={() => setForm({
       version: 1, payload: [{ associationId: legacy.associationId, destination: '', platforms: ['windows/x86_64', 'windows/aarch64'] }],
@@ -247,10 +300,37 @@ function ConfigurationForm({ releaseId, derived, snapshot, sources, doc, etag, r
   const layout = preview?.recipe || preview
   const output = Object.keys(layout?.files || {})
   return <div className="form-stack">
+    {discovery}
     <fieldset disabled={busy} className="form-stack">
       {derived ? <p>Installation uses the existing RecipeV1 lock and its declared launch target for the chosen platform.</p> : <>
         <details open><summary>Base payload</summary><Copies copies={form.payload || []} sources={sources} update={payload => update({ payload })} /></details>
-        <details><summary>Language and component choices</summary><Options groups={groups} sources={sources} update={options => { update({ options }); setSelections({}) }} /></details>
+        <details><summary>Language and component choices</summary>
+          <label>Localization packaging<select value={form.localization?.mode || (groups.some(group => group.language) ? 'legacy' : 'unknown')}
+            onChange={event => {
+              const mode = event.target.value
+              if (mode === 'legacy') update({ localization: undefined })
+              else if (mode === 'selectable') update({ localization: { mode } })
+              else {
+                const options = groups.filter(group => !group.language)
+                if (options.length < groups.length && !window.confirm('Remove the current installation-time language choices and their file mappings?')) return
+                if (mode === 'fixed') update({ localization: { mode, language: '' }, options })
+                else if (mode === 'bundled') update({ localization: { mode, languages: ['', ''] }, options })
+                else update({ localization: { mode: 'unknown' }, options })
+              }
+              setSelections({})
+            }}>
+            {!form.localization && groups.some(group => group.language) && <option value="legacy">Existing language choices</option>}
+            <option value="unknown">Unknown</option><option value="fixed">Fixed language</option>
+            <option value="bundled">Bundled languages (selected in the application)</option>
+            <option value="selectable">Selectable languages (different installation files)</option>
+          </select></label>
+          {form.localization?.mode === 'fixed' && <label>Language identifier<input value={form.localization.language} placeholder="ru-RU"
+            onChange={event => update({ localization: { mode: 'fixed', language: event.target.value } })} /></label>}
+          {form.localization?.mode === 'bundled' && <label>Language identifiers (comma-separated)<input value={form.localization.languages.join(',')} placeholder="en-US,ru-RU"
+            onChange={event => update({ localization: { mode: 'bundled', languages: event.target.value.split(',').map(tag => tag.trim()) } })} /></label>}
+          <Options groups={groups} sources={sources} allowLanguage={form.localization?.mode === 'selectable'}
+            update={options => { update({ options }); setSelections({}) }} />
+        </details>
         <details><summary>Prerequisite installers</summary><p>Executable prerequisites run only in a supporting client with user authorization. Order follows this list.</p>
           <Prerequisites items={form.prerequisites || []} groups={groups} sources={sources} update={prerequisites => update({ prerequisites })} />
         </details>
@@ -306,11 +386,17 @@ function ConfigurationForm({ releaseId, derived, snapshot, sources, doc, etag, r
 export function InstallationConfiguration({ editable, ...props }: EditorProps & { editable: boolean }) {
   const [opened, setOpened] = useState(false)
   const configuration = record(depot(props.snapshot.release.data)?.installation)
+  const localization = record(configuration?.localization)
+  const languageSummary = localization?.mode === 'fixed' ? `Fixed application language · ${text(localization.language)}`
+    : localization?.mode === 'bundled' ? `Bundled application languages · ${strings(localization.languages).join(', ')}`
+    : localization?.mode === 'selectable' ? 'Application language affects installed files'
+    : localization?.mode === 'unknown' ? 'Application localization is unconfirmed' : ''
   if (!editable && !configuration) return null
   let summary: ReactNode = 'Optional configuration'
   if (configuration) summary = configuration.version === 1 ? 'Installation Manifest V1' : 'Unsupported installation manifest'
   return <section className="panel"><h2>Installation Configuration</h2>
     <p>{summary}</p>
+    {languageSummary && <p>{languageSummary}</p>}
     {editable ? <details onToggle={event => { if (event.currentTarget.open) setOpened(true) }}>
       <summary>Configure payload, choices and prerequisites</summary>
       {opened && <Editor {...props} />}

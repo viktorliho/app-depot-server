@@ -64,3 +64,12 @@ The Portal edits recipes through form controls. Advanced JSON authoring and expl
 
 
 **Installation Configuration** is optional on Release Details. Owners and admins can pick associated File or Tree sources, choose destinations and collision policies, configure language and component choices and defaults, order explicitly confirmed prerequisite installers, and select an existing launch point. Preview resolves a concrete platform and selection before saving. Save uses the strong Release declaration ETag and creates a new revision even on a Published Release. Advanced release details retain the raw JSON editor. Existing GOG releases offer an explicit recovered-payload starting point and keep the association's source evidence.
+
+GOG review presents the proposed launch executable, enabled prerequisite sequence,
+package evidence, unresolved actions and an optional publisher-confirmed game language.
+Clearing the launch option or disabling installers before import changes the declaration
+proposal. The full recovered payload still enters a Draft for explicit publication.
+For an existing Release, use Installation Configuration → Detect installation
+components, choose a Tree, review the result and apply it to the editor. Saving creates
+a declaration revision with the existing concurrency check. The localization editor
+offers Unknown, Fixed, Bundled and Selectable packaging.

@@ -679,3 +679,13 @@ Content-Type: application/json
 
 {"items":[{"type":"Directory","path":"empty/nested"}],"nextCursor":null}
 ```
+
+`POST /api/v1/associations/{id}/installation/discover` returns a discovery report,
+suggested generic prerequisites and unresolved notes for a registered Tree. It requires
+owner/admin authorization and CSRF for browser sessions, does not mutate the release,
+and rejects inventories above 100,000 files. A busy response is retryable. Apply results
+through the existing declaration PUT using its revision ETag.
+
+GOG analysis can return an optional `proposal`. GOG review accepts optional
+`disabledPrerequisites` paths and a publisher `confirmedLocale` or `confirmedBundledLocales`. A disabled package
+remains in the content and observations but is omitted from the executable sequence.

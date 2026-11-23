@@ -1,4 +1,7 @@
-use crate::import_source::{ImportRoot, Scan};
+use crate::{
+    discovery,
+    import_source::{ImportRoot, Scan},
+};
 use app_depot_domain::tree::validate_path;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -223,6 +226,31 @@ fn same_stamps(root: &ImportRoot, files: &[(String, File, u64)], initial: &[Stam
                     .and_then(|current| stamp(&current))
                     .is_ok_and(|current| &current == expected)
         })
+}
+
+#[derive(Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct InstallationProposal {
+    #[serde(flatten)]
+    discovery: discovery::Report,
+    source_observations: SourceObservations,
+}
+
+#[derive(Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SourceObservations {
+    reported_application_languages: Vec<String>,
+    setup_actions: Vec<SetupObservation>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SetupObservation {
+    action: String,
+    target: Option<String>,
+    original_argument_text: Option<String>,
+    requires_elevation: bool,
+    conditions: Vec<String>,
 }
 
 impl Work {
@@ -483,6 +511,181 @@ impl Work {
             unknown_actions: UNKNOWN,
         };
         Ok((manifest, listing.paths))
+    }
+
+    fn sidecar(report: &Analysis, root: &ImportRoot, extension: &str) -> Option<Value> {
+        let id = report.gog_game_id.as_deref()?;
+        if id.is_empty() || !id.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let file = root.open_file(&format!("goggame-{id}.{extension}")).ok()?;
+        if file.metadata().ok()?.len() > 65_536 {
+            return None;
+        }
+        serde_json::from_reader(file.take(65_537)).ok()
+    }
+
+    fn primary_launch(report: &Analysis, metadata: Option<&Value>) -> BTreeSet<String> {
+        let primary = metadata.and_then(|metadata| {
+            let mut tasks = metadata
+                .get("playTasks")?
+                .as_array()?
+                .iter()
+                .filter_map(|task| {
+                    if task["isPrimary"].as_bool() != Some(true)
+                        || task["category"] != "game"
+                        || task["type"] != "FileTask"
+                    {
+                        return None;
+                    }
+                    let path = task["path"].as_str()?.replace('\\', "/");
+                    report.candidate_executables.contains(&path).then_some(path)
+                });
+            let one = tasks.next()?;
+            tasks.next().is_none().then_some(one)
+        });
+        primary.map_or_else(
+            || report.candidate_executables.clone(),
+            |path| BTreeSet::from([path]),
+        )
+    }
+
+    fn proposal(
+        report: &Analysis,
+        root: &ImportRoot,
+        paths: &BTreeSet<&str>,
+        flag: &AtomicBool,
+    ) -> InstallationProposal {
+        let info = Self::sidecar(report, root, "info");
+        let script = Self::sidecar(report, root, "script");
+        let reported_application_languages = info
+            .as_ref()
+            .and_then(|info| info["languages"].as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .filter(|tag| tag.len() <= 80 && app_depot_domain::installation::language_id(tag))
+            .take(32)
+            .map(str::to_owned)
+            .collect();
+        fn bounded(value: &Value) -> Option<String> {
+            value
+                .as_str()
+                .filter(|text| text.len() <= 1024 && !text.chars().any(char::is_control))
+                .map(str::to_owned)
+        }
+        let setup_actions = script
+            .as_ref()
+            .and_then(|script| script["actions"].as_array())
+            .into_iter()
+            .flatten()
+            .take(64)
+            .filter_map(|item| {
+                let install = item.get("install")?;
+                let action = bounded(&install["action"])?;
+                let args = &install["arguments"];
+                let target = bounded(&args["executable"]).and_then(|path| {
+                    let relative = path.strip_prefix("{app}/")?.replace('\\', "/");
+                    paths.contains(relative.as_str()).then_some(relative)
+                });
+                Some(SetupObservation {
+                    action,
+                    original_argument_text: target
+                        .as_ref()
+                        .and_then(|_| bounded(&args["argument"])),
+                    target,
+                    requires_elevation: args["runAsAdmin"].as_bool() == Some(true),
+                    conditions: args["conditions"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .take(16)
+                        .filter_map(bounded)
+                        .collect(),
+                })
+            })
+            .collect();
+        InstallationProposal {
+            discovery: discovery::inspect(
+                paths,
+                &Self::primary_launch(report, info.as_ref()),
+                |path| {
+                    root.open_file(path)
+                        .map(|file| Box::new(file) as Box<dyn Read>)
+                },
+                flag,
+                None,
+            ),
+            source_observations: SourceObservations {
+                reported_application_languages,
+                setup_actions,
+            },
+        }
+    }
+
+    pub(crate) fn discovery_preview(
+        &self,
+        report: &Analysis,
+        listed: &BTreeSet<String>,
+        flag: &AtomicBool,
+    ) -> Result<InstallationProposal, Error> {
+        let paths = listed.iter().map(String::as_str).collect();
+        let mut selected = discovery::probes(&paths, &report.candidate_executables);
+        if let Some(id) = report.gog_game_id.as_deref() {
+            for extension in ["info", "script"] {
+                let sidecar = format!("goggame-{id}.{extension}");
+                if paths.contains(sidecar.as_str()) {
+                    selected.push(sidecar);
+                }
+            }
+        }
+        if selected.is_empty() {
+            return Ok(InstallationProposal::default());
+        }
+        self.extract_preview(&report.setup, &selected, flag)?;
+        let root =
+            ImportRoot::private_staging(self.output.clone()).map_err(|_| Error::Environment)?;
+        let info = Self::sidecar(report, &root, "info");
+        let primary = Self::primary_launch(report, info.as_ref());
+        if primary.len() == 1 && primary.first().is_some_and(|path| !selected.contains(path)) {
+            self.extract_preview(
+                &report.setup,
+                &primary.into_iter().collect::<Vec<_>>(),
+                flag,
+            )?;
+        }
+        Ok(Self::proposal(report, &root, &paths, flag))
+    }
+
+    fn extract_preview(
+        &self,
+        setup: &str,
+        selected: &[String],
+        flag: &AtomicBool,
+    ) -> Result<(), Error> {
+        let filters: Vec<_> = selected.iter().map(|path| format!("/{path}")).collect();
+        let setup = self.input.join(setup);
+        let mut args = vec!["--extract", "--test", "--silent", "--no-warn-unused"];
+        for filter in &filters {
+            args.extend(["--include", filter]);
+        }
+        args.extend(["--", setup.to_str().ok_or(Error::Source)?]);
+        let (_, errors, success) = self.run(&args, flag, true)?;
+        check_data(&errors, success)
+    }
+
+    pub(crate) fn discovery_import(
+        report: &Analysis,
+        root: &ImportRoot,
+        scan: &Scan,
+        flag: &AtomicBool,
+    ) -> InstallationProposal {
+        let paths = scan
+            .files
+            .iter()
+            .map(|file| file.logical_path.as_str())
+            .collect();
+        Self::proposal(report, root, &paths, flag)
     }
 
     pub fn extract(

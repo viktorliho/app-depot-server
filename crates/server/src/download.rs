@@ -410,9 +410,100 @@ fn embedded_build_info() -> serde_json::Value {
     )
 }
 
+static DISCOVERY_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+
+async fn installation_discovery(
+    State(state): State<DownloadState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    use app_depot_application::upload::UploadError;
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        io,
+        os::unix::fs::OpenOptionsExt,
+    };
+    let actor = crate::auth::authorize(&state.auth, &headers, true).await?;
+    let artifact_id: String = sqlx::query_scalar(
+        "SELECT x.artifact_id FROM associations x JOIN releases r ON r.id=x.release_id JOIN apps a ON a.id=r.app_id WHERE x.id=? AND (a.owner_id=? OR ?=1)"
+    ).bind(&id).bind(&actor.id).bind(actor.server_admin)
+        .fetch_optional(&state.auth.pool).await.map_err(|_| ApiError::server())?
+        .ok_or(UploadError::NotFound)?;
+    if TreeArtifactId::parse(&artifact_id).is_none() {
+        return Ok(problem(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "discovery_tree_required",
+            "Choose a Tree Artifact",
+        ));
+    }
+    let Ok(slot) = DISCOVERY_SLOTS.try_acquire() else {
+        return Ok(problem(
+            StatusCode::TOO_MANY_REQUESTS,
+            "discovery_busy",
+            "Installation discovery is busy; retry shortly",
+        ));
+    };
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT path, sha256 FROM artifact_entries WHERE artifact_id=? AND entry_type='File' LIMIT 100001"
+    ).bind(artifact_id).fetch_all(&state.auth.pool).await.map_err(|_| ApiError::server())?;
+    if rows.len() > 100_000 {
+        return Ok(problem(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "discovery_inventory_limit",
+            "Artifact inventory exceeds discovery limit",
+        ));
+    }
+    let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let _cancel = crate::server_import::CancelOnDrop(flag.clone());
+    let report = tokio::task::spawn_blocking(move || {
+        let _slot = slot;
+        let hashes: BTreeMap<_, _> = rows
+            .iter()
+            .map(|(path, hash)| (path.as_str(), hash.as_str()))
+            .collect();
+        let paths = hashes.keys().copied().collect();
+        crate::discovery::inspect(
+            &paths,
+            &BTreeSet::new(),
+            |path| {
+                let hash = hashes
+                    .get(path)
+                    .copied()
+                    .filter(|hash| hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit()))
+                    .ok_or(io::ErrorKind::InvalidData)?;
+                let file = std::fs::OpenOptions::new()
+                    .read(true)
+                    .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                    .open(state.root.join("cas").join(&hash[..2]).join(hash))?;
+                if !file.metadata()?.is_file() {
+                    return Err(io::ErrorKind::InvalidData.into());
+                }
+                Ok(Box::new(file))
+            },
+            &flag,
+            Some(&hashes),
+        )
+    })
+    .await
+    .map_err(|_| ApiError::server())?;
+    let report = serde_json::to_value(report).map_err(|_| ApiError::server())?;
+    let prerequisites =
+        app_depot_infrastructure::installation::discovery_prerequisites(&report, &id, None);
+    let unresolved = app_depot_infrastructure::installation::discovery_notes(&report);
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(json!({"report":report,"prerequisites":prerequisites,"unresolved":unresolved})),
+    )
+        .into_response())
+}
+
 pub fn router(state: DownloadState) -> Router {
     Router::new()
         .route("/capabilities", get(capabilities))
+        .route(
+            "/associations/{id}/installation/discover",
+            axum::routing::post(installation_discovery),
+        )
         .route("/artifacts/{artifact_id}", get(artifact))
         .route("/artifacts/{artifact_id}/content", get(content))
         .route("/artifacts/{artifact_id}/inventory", get(inventory))
