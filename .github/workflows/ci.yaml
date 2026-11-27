@@ -24,7 +24,7 @@ jobs:
       - name: Prepare public Inno Setup test fixtures
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends innoextract
+          sudo apt-get install -y --no-install-recommends innoextract libarchive-dev unshield
           sh crates/server/tests/fixtures/prepare-gog.sh "$RUNNER_TEMP/gog-fixtures"
           printf 'GOG_TEST_FIXTURES=%s\n' "$RUNNER_TEMP/gog-fixtures" >> "$GITHUB_ENV"
       - run: cargo test --workspace --locked
@@ -33,10 +33,13 @@ jobs:
       - run: npm --prefix web ci
       - run: npm --prefix web run test:unit
       - run: npm --prefix web run build
+      - run: target/debug/app-depot-server validate-store store
+      - run: STORE_BROWSER=1 python3 store/tests/observed.py target/debug/app-depot-server
       - run: npm --prefix web run smoke:lan-http
         timeout-minutes: 7
       - name: Validate OpenAPI
         run: |
           python3 -m venv "$RUNNER_TEMP/openapi"
           "$RUNNER_TEMP/openapi/bin/pip" install openapi-spec-validator==0.7.2
+          "$RUNNER_TEMP/openapi/bin/python" store/validate.py
           "$RUNNER_TEMP/openapi/bin/python" -m openapi_spec_validator docs/openapi.yaml

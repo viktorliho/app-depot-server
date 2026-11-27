@@ -10,7 +10,7 @@ App Depot Server is pre-1.0. APIs, storage schemas and configuration may change 
 
 ## Local development
 
-Use Rust 1.88.0, Node 26.5.0, and npm 11.17.0 as pinned by `rust-toolchain.toml`, `web/.node-version`, and `web/package.json`. Keep development data outside the repository and separate from Production data.
+Use Rust 1.88.0, Node 26.5.0, and npm 11.17.0 as pinned by `rust-toolchain.toml`, `web/.node-version`, and `web/package.json`. Linux x86-64 builds link against libarchive (libarchive-dev on Debian). Store archive operations use the non-root Linux extractor sandbox, with unshield for InstallShield CAB. Keep development data outside the repository and separate from Production data.
 
 ```sh
 mkdir -p /tmp/app-depot-local
@@ -43,6 +43,7 @@ Run `cargo test --workspace --locked` and `npm --prefix web run build` for the m
 - [Reliable upload and commit](docs/upload-commit.md)
 - [API v1](docs/api.md) and [OpenAPI 3.1](docs/openapi.yaml)
 - [Deployment and operations](docs/deployment-operations.md)
+- [Store catalog and StoreRecipeV1](store/README.md)
 - [Portal UX architecture](docs/portal-ux.md)
 
 ## License

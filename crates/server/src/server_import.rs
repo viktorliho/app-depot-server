@@ -58,6 +58,8 @@ pub struct ImportRequest {
     target: Target,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     gog_review: Option<GogReview>,
+    #[serde(skip)]
+    store_declaration: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -603,7 +605,7 @@ async fn run_import(
             std::io::ErrorKind::InvalidData => UploadError::ConflictingBytes,
             _ => UploadError::Invalid,
         })?;
-        manifest = None;
+        manifest = input.store_declaration.clone();
     }
     if cancelled.load(Ordering::Relaxed) {
         return Err(UploadError::SessionCancelled);
@@ -731,6 +733,56 @@ async fn run_import(
     )
     .await;
     Ok(())
+}
+
+pub(crate) async fn import_store_tree(
+    state: &ImportState,
+    principal: &Principal,
+    root: ImportRoot,
+    target: Target,
+    key: &str,
+    declaration: serde_json::Value,
+    progress: &mpsc::Sender<String>,
+) -> Result<app_depot_application::upload::FinalizationResult, UploadError> {
+    let request = ImportRequest {
+        root_id: "store".into(),
+        path: String::new(),
+        mode: "BareTree".into(),
+        target,
+        gog_review: None,
+        store_declaration: Some(declaration),
+    };
+    // A restored or expired upload has an immutable terminal result. Derive
+    // the next attempt from that exact session so a restart follows the same chain.
+    let mut attempt = key.to_owned();
+    while let Some(session) = bind_request(state, principal, &attempt, &request).await? {
+        match state.coordinator.result(principal, &session).await? {
+            Some(result) if result.phase == "Completed" => return Ok(result),
+            Some(result) if matches!(result.phase.as_str(), "Failed" | "Cancelled") => {
+                attempt = hex::encode(Sha256::digest(format!("{key}:{session}")));
+            }
+            _ => break,
+        }
+    }
+    run_import(
+        state,
+        &root,
+        principal,
+        &attempt,
+        &request,
+        progress,
+        &Arc::new(AtomicBool::new(false)),
+    )
+    .await?;
+    let session = bind_request(state, principal, &attempt, &request)
+        .await?
+        .ok_or(UploadError::Invalid)?;
+    state
+        .coordinator
+        .result(principal, &session)
+        .await?
+        .filter(|r| r.phase == "Completed")
+        .ok_or(UploadError::Invalid)
 }
 
 async fn prepare_inventory(

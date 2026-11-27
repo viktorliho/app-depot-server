@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "StoreCatalogV1"
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "recipes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 128,
+            "pattern": "^[a-z0-9]+([.-][a-z0-9]+)*$"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        },
+        "required": [
+          "id",
+          "sha256"
+        ]
+      },
+      "maxItems": 128,
+      "minItems": 0
+    }
+  },
+  "required": [
+    "schema",
+    "generation",
+    "recipes"
+  ]
+}

@@ -8,6 +8,7 @@ COPY web/ ./
 RUN npm run build
 
 FROM --platform=linux/amd64 rust:1.88-bookworm AS server-build
+RUN apt-get update && apt-get install -y --no-install-recommends libarchive-dev && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 ARG APP_DEPOT_BUILD_VERSION
 ARG APP_DEPOT_BUILD_REVISION
@@ -17,7 +18,7 @@ RUN APP_DEPOT_BUILD_VERSION="$APP_DEPOT_BUILD_VERSION" APP_DEPOT_BUILD_REVISION=
 
 FROM --platform=linux/amd64 debian:bookworm-slim
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates libsqlite3-0 curl innoextract=1.9-0.1 \
+    && apt-get install -y --no-install-recommends ca-certificates libsqlite3-0 libarchive13 unshield curl innoextract=1.9-0.1 \
     && rm -rf /var/lib/apt/lists/*
 ARG APP_DEPOT_UID=10001
 ARG APP_DEPOT_GID=10001

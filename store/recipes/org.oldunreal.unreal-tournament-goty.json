@@ -1,0 +1,162 @@
+{
+  "schema": "StoreRecipeV1",
+  "revision": 1,
+  "id": "org.oldunreal.unreal-tournament-goty",
+  "title": "Unreal Tournament 1999 GOTY",
+  "upstream": "https://www.oldunreal.com/downloads/unrealtournament/full-game-installers/",
+  "availability": "reviewRequired",
+  "platform": "linux-x86_64",
+  "version": "v469e",
+  "components": [
+    {
+      "name": "disc",
+      "url": "https://files.oldunreal.net/UT_GOTY_CD1.ISO",
+      "bytes": 649633792,
+      "sha256": "e184984ca88f001c5ddd52035d76cd64e266e26c74975161b5ed72366c74704f",
+      "format": "iso9660"
+    },
+    {
+      "name": "bonuspack",
+      "url": "https://files.oldunreal.net/utbonuspack4-zip.7z",
+      "bytes": 11268844,
+      "sha256": "5b7a1080724a122a596c226c50d4dc7c2d7636ceaf067e9c12112014a170ffba",
+      "format": "7z"
+    },
+    {
+      "name": "patch",
+      "url": "https://github.com/OldUnreal/UnrealTournamentPatches/releases/download/v469e/OldUnreal-UTPatch469e-Linux-amd64.tar.bz2",
+      "bytes": 75316202,
+      "sha256": "08c806aa3721b1970045aa158ad90051329d982e8a9a3661153900e9ccbf6b0c",
+      "format": "tar.bz2",
+      "github": {
+        "repository": "OldUnreal/UnrealTournamentPatches",
+        "prefix": "OldUnreal-UTPatch",
+        "suffix": "-Linux-amd64.tar.bz2",
+        "previews": false
+      }
+    }
+  ],
+  "prepare": [
+    {
+      "component": "disc",
+      "from_prefix": "Help/",
+      "to_prefix": "Help/",
+      "include": [
+        "**"
+      ],
+      "exclude": [],
+      "on_conflict": "reject"
+    },
+    {
+      "component": "disc",
+      "from_prefix": "Maps/",
+      "to_prefix": "Maps/",
+      "include": [
+        "*.unr.uz"
+      ],
+      "exclude": [],
+      "on_conflict": "reject",
+      "operation": "unreal-uz"
+    },
+    {
+      "component": "disc",
+      "from_prefix": "Maps/",
+      "to_prefix": "Maps/",
+      "include": [
+        "*.unr"
+      ],
+      "exclude": [],
+      "on_conflict": "reject"
+    },
+    {
+      "component": "disc",
+      "from_prefix": "Music/",
+      "to_prefix": "Music/",
+      "include": [
+        "**"
+      ],
+      "exclude": [],
+      "on_conflict": "reject"
+    },
+    {
+      "component": "disc",
+      "from_prefix": "Sounds/",
+      "to_prefix": "Sounds/",
+      "include": [
+        "**"
+      ],
+      "exclude": [],
+      "on_conflict": "reject"
+    },
+    {
+      "component": "disc",
+      "from_prefix": "System/",
+      "to_prefix": "System/",
+      "include": [
+        "**"
+      ],
+      "exclude": [
+        "*.exe",
+        "*.dll"
+      ],
+      "on_conflict": "reject"
+    },
+    {
+      "component": "disc",
+      "from_prefix": "Textures/",
+      "to_prefix": "Textures/",
+      "include": [
+        "**"
+      ],
+      "exclude": [],
+      "on_conflict": "reject"
+    },
+    {
+      "component": "bonuspack",
+      "from_prefix": "",
+      "to_prefix": "",
+      "include": [
+        "Maps/**",
+        "System/**",
+        "Textures/**"
+      ],
+      "exclude": [],
+      "on_conflict": "replace"
+    },
+    {
+      "component": "patch",
+      "from_prefix": "",
+      "to_prefix": "",
+      "include": [
+        "Help/**",
+        "Maps/**",
+        "Music/**",
+        "Sounds/**",
+        "System/**",
+        "System64/**",
+        "SystemLocalized/**",
+        "Textures/**",
+        "Web/**"
+      ],
+      "exclude": [],
+      "on_conflict": "replace"
+    },
+    {
+      "operation": "copy",
+      "from": "Maps/DM-Cybrosis][.unr",
+      "to": "Maps/DOM-Cybrosis][.unr",
+      "on_conflict": "reject"
+    }
+  ],
+  "required": [
+    "System64/ut-bin-amd64",
+    "System/Engine.u",
+    "Maps/AS-Frigate.unr"
+  ],
+  "launch": {
+    "path": "System64/ut-bin-amd64",
+    "cwd": "System64",
+    "args": []
+  },
+  "rights": "OldUnreal provides a full-game installer. Its UT99 license refers use and distribution to the Epic Games Terms of Service, which grant a personal, non-transferable license. Permission for a third-party server to distribute the prepared game has not been established. https://github.com/OldUnreal/UnrealTournamentPatches/blob/master/LICENSE.md"
+}

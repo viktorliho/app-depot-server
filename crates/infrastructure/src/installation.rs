@@ -514,13 +514,23 @@ pub fn discovery_notes(report: &Value) -> Vec<String> {
 }
 
 /// Seed a Release configuration during registration when the publisher has no existing configuration.
-pub(crate) async fn seed_gog(
+pub(crate) async fn seed_import(
     tx: &mut Transaction<'_, Sqlite>,
     release: &str,
     association: &str,
     metadata: &Value,
     mut data: Value,
 ) -> Result<(), CatalogError> {
+    if metadata.pointer("/appDepot/store").is_some() {
+        let point = &metadata["appDepot"]["entryPoints"][0];
+        let revision = document_in_tx(tx, "Association", association).await?;
+        let manifest = json!({"version":1,"payload":[{"associationId":association,"destination":"","platforms":point["platforms"]}],
+            "launch":{"associationId":association,"revisionId":revision.revision_id,"entryPointId":point["id"],"destination":point["target"]["path"]}});
+        parse(&manifest)?;
+        data["appDepot"]["installation"] = manifest;
+        crate::declarations::append(tx, "Release", release, &data).await?;
+        return Ok(());
+    }
     let Some(source) = metadata.pointer("/appDepot/gogOfflineInstaller") else {
         return Ok(());
     };

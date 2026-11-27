@@ -1,0 +1,18 @@
+{
+  "schema": "StoreCatalogV1",
+  "recipes": [
+    {
+      "id": "org.oldunreal.unreal-gold",
+      "sha256": "bd123759cfe8d6c95912e16ed2ba2ca761af37af38462adcada4cd3a4649cfb0"
+    },
+    {
+      "id": "org.oldunreal.unreal-tournament-2004-ece",
+      "sha256": "f5ae58407d2a8d8379775913a0c2fadc581e9c0741bd951ffb5f4891fafb33fe"
+    },
+    {
+      "id": "org.oldunreal.unreal-tournament-goty",
+      "sha256": "cd8b2f00d3265e91acca307504e18389597bf5a0a4d4732504440db340d18c89"
+    }
+  ],
+  "generation": 1
+}

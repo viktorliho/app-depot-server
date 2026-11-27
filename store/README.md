@@ -1,0 +1,19 @@
+# Store catalog
+
+The official catalog is published as UTF-8 JSON from the Server repository. A reviewed commit to main publishes store/catalog.json and store/recipes together. Git history provides immutable publication revisions. No image build, release tag or Server restart is required. Server Admins use Store → Refresh catalog to accept an update.
+
+Set APP_DEPOT_STORE_SOURCE to a trusted HTTPS directory to select another publisher. The default is https://raw.githubusercontent.com/viktorliho/app-depot-server/main/store. Selecting a publisher authorizes it to supply upstream locations and preparation instructions. Use a source you control or trust. Source identity scopes observations. The authenticated HTTPS index pins the exact bytes of each recipe by SHA-256. An index contains at most 128 entries. The Server rejects incompatible catalogs, catalog rollback, changed recipes without a revision increase and conflicting content at the same generation, and retains the last successful snapshot across restarts.
+
+## Publishing recipes
+
+Use schemas/catalog.json and schemas/recipe.json (JSON Schema 2020-12). For a new recipe, choose a unique ID, write recipes/ID.json, and add that file's SHA-256 to the index. For an edit, increment the recipe revision and replace its digest. Increment the index generation for every publication. Install Python jsonschema and run python3 store/validate.py before committing. Run app-depot-server validate-store store with the target Server binary to check semantic compatibility offline. Publish all changed files together. A refresh racing a Git update may fail a digest check and can be retried.
+
+StoreRecipeV1 is independent of the Derived Applications RecipeV1 contract. It describes a complete prepared Linux x86-64 application. Its upstream field cites the publisher, rights records the acquisition and distribution conditions, and availability controls whether acquisition is enabled. The Store repository contains metadata only.
+
+Each component specifies an HTTPS URL, byte size, SHA-256 and format. A component with discovery names an HTTPS JSON descriptor with version, bytes and sha256 for the same download URL. A github selector identifies an official repository and a unique release asset by filename prefix and suffix. The release API must provide the asset SHA-256. The optional exclude substring filters out assets such as SDK builds. When previews is false, discovery selects the newest eligible release in up to four pages of eight releases. A static component uses the recipe pin.
+
+Preparation supports raw files, ISO9660, ZIP, 7z and bzip2-compressed tar. Ordered extract steps map a source prefix to a destination prefix. Filters support exact paths, ** for all descendants, directory/** and basename suffix patterns such as *.dll. A copy step duplicates a prepared file. unreal-uz decodes bounded UE1 redirect files. installshield-cab selects a named InstallShield group. Conflict policy is reject or explicit replacement of a regular file. Required regular files, launch executable and working directory are checked before import. The worker never runs downloaded game executables.
+
+## Initial entries
+
+The individual upstream pages linked in each recipe describe official full-game installation. The historic ISO, bonus-pack and Linux patch pins were verified against downloaded bytes on 2026-11-27. UT99 pins 469e stable. UT2004 pins 3374-rc3. The historical 3374-preview-23 component was also verified. The source pages do not establish permission for third-party distribution of prepared payloads. All three entries are marked reviewRequired.

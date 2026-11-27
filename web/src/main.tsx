@@ -7,6 +7,7 @@ import { ApplicationOverview, ApplicationReleases, ApplicationsPage, CreateAppli
 import { AppDeclarations, AppSettings, ChannelsPage, NewRelease, OperationPage, ReleaseDetail } from './management'
 import { ArtifactIngestionPage } from './ingestion'
 import { UsersPage, DiagnosticsPage, ServerSettingsPage, ImportSourcesPage } from './admin'
+import { StorePage } from "./store"
 import { BackupsPage } from './backups'
 import { AccountPage } from './account'
 import { ArtworkPage } from './artwork'
@@ -26,6 +27,7 @@ createRoot(document.getElementById('root')!).render(<React.StrictMode><BrowserRo
     <Route path="/account" element={<AccountPage />} />
     <Route path="/operations/:id" element={<OperationPage />} />
     <Route element={<RequireAdmin />}>
+      <Route path="/admin/store" element={<StorePage />} />
       <Route path="/admin/users" element={<UsersPage />} />
       <Route path="/admin/backups" element={<BackupsPage />} />
       <Route path="/admin/diagnostics" element={<DiagnosticsPage />} />

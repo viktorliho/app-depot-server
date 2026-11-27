@@ -48,6 +48,10 @@ mod gog;
 mod import_source;
 mod recipes;
 mod server_import;
+mod store;
+mod store_cab;
+mod store_prepare;
+mod store_uz;
 mod upload;
 
 fn usage() -> ! {
@@ -144,8 +148,23 @@ async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
 }
 
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::args().nth(1).as_deref() == Some("validate-store") {
+        let directory = std::env::args()
+            .nth(2)
+            .ok_or("validate-store requires a catalog directory")?;
+        store::validate_local(&directory)?;
+        return Ok(());
+    }
+    if std::env::args().nth(1).as_deref() == Some("store-unpack-worker") {
+        store_prepare::unpack_worker(&std::env::args().skip(2).collect::<Vec<_>>())?;
+        return Ok(());
+    }
+    server_main()
+}
+
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn server_main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().skip(1).collect();
     let command = args.first().map(String::as_str).unwrap_or_else(|| usage());
     if command == "restore" {
@@ -252,7 +271,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             let import_sources = import_source::load_roots(&lock.path)?;
             let import_roots = Arc::new(import_sources.roots);
-            let gog_scratch = Arc::new(gog::cleanup(&lock.path)?);
+            let gog_scratch = Arc::new(import_source::reset_scratch(lock.path.join("gog-work"))?);
             let active_imports = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
             let download_state = download::DownloadState {
                 auth: auth_state.clone(),
@@ -270,6 +289,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let cleanup_signal = auth_state.cleanup_signal();
             let metrics = Arc::new(diagnostics::Metrics::new());
             let backup_boundary = Arc::new(tokio::sync::RwLock::new(()));
+            let import_state = server_import::ImportState {
+                auth: auth_state.clone(),
+                coordinator: coordinator.clone(),
+                roots: import_roots,
+                inbox_path: import_sources.inbox_path,
+                active: active_imports.clone(),
+                permits: Arc::new(tokio::sync::Semaphore::new(2)),
+                gog_permit: Arc::new(tokio::sync::Semaphore::new(1)),
+                gog_scratch,
+            };
+            let (store_router, store_state) = store::router(
+                import_state.clone(),
+                &import_source::reset_scratch(lock.path.join("store-work"))?,
+            )?;
             let api = auth::router(auth_state.clone())
                 .merge(backups::router(backups::BackupState {
                     auth: auth_state.clone(),
@@ -284,6 +317,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     auth: auth_state.clone(),
                     root: Arc::new(lock.path.clone()),
                 }))
+                .merge(store_router)
                 .merge(recipes::router(auth_state.clone()))
                 .merge(declarations::router(auth_state.clone()))
                 .merge(diagnostics::router(diagnostics::DiagnosticsState {
@@ -291,16 +325,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     metrics: metrics.clone(),
                     root: lock.path.clone(),
                 }))
-                .merge(server_import::router(server_import::ImportState {
-                    auth: auth_state.clone(),
-                    coordinator: coordinator.clone(),
-                    roots: import_roots,
-                    inbox_path: import_sources.inbox_path,
-                    active: active_imports.clone(),
-                    permits: Arc::new(tokio::sync::Semaphore::new(2)),
-                    gog_permit: Arc::new(tokio::sync::Semaphore::new(1)),
-                    gog_scratch,
-                }))
+                .merge(server_import::router(import_state))
                 .merge(channels::router(auth_state))
                 .merge(upload::router(upload_state))
                 .merge(download::router(download_state))
@@ -357,6 +382,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .await;
                 match recovered {
                     Ok(()) => {
+                        let store_worker =
+                            tokio::spawn(store::worker(store_state, backup_boundary.clone()));
                         flag_for_recovery.store(true, Ordering::Release);
                         println!("{{\"event\":\"ready\"}}");
                         #[cfg(debug_assertions)]
@@ -368,7 +395,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             tokio::select! {
                                 _ = interval.tick() => {},
                                 _ = cleanup_signal.notified() => {},
-                                _ = worker_shutdown_rx.changed() => break,
+                                _ = worker_shutdown_rx.changed() => {store_worker.abort();break},
                             }
                             #[cfg(debug_assertions)]
                             eprintln!("{{\"event\":\"preview_worker_wakeup\"}}");

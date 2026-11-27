@@ -537,6 +537,11 @@ try {
     if (!build || build.version !== null || build.revision !== null) throw new Error(`Local build metadata was misleading: ${JSON.stringify(build)}`)
     await page.getByText('App Depot Server: Development build').waitFor()
   }
+  await page.getByRole('link', { name: 'Store', exact: true }).click()
+  await page.getByRole('heading', { name: 'Store', exact: true }).waitFor()
+  await page.getByRole('button', { name: 'Refresh catalog' }).waitFor()
+  await page.getByRole('searchbox', { name: 'Search applications' }).waitFor()
+  await page.goto(base)
   let inboxPath
   if (preview) {
     await page.goto(`${base}admin/import-sources`)

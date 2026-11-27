@@ -99,3 +99,7 @@ Manual target validation on TrueNAS SCALE 25.10.x: install from the YAML on a fr
 | 16 | Unsafe filesystem/mount | Demonstrable incompatibility rejects startup; unprovable flush behavior remains an assumption. |
 | 17 | Non-root permission failure | Startup reports failure without root escalation or recursive chown. |
 | 18 | Diagnostics and secret redaction | Non-Admin cannot read diagnostics/backups; Admin sees aggregates, never secrets or private bytes. |
+
+## Store catalog and observed applications
+
+The Store uses the trusted HTTPS directory configured by APP_DEPOT_STORE_SOURCE or the official catalog in the Server repository. See [Store catalog](../store/README.md) for publication and compatibility. Catalog snapshots and observed application settings are persisted in SQLite. Imports are private initially. Prepared files pass through the existing upload coordinator, CAS and publication checks. Failed updates preserve the last published Release. Give the non-root Server temporary storage for downloads and extraction under the managed data root. Archive and InstallShield workers require the same Linux sandbox facilities as GOG extraction. Budget per job for up to 16 GiB of source components, 16 GiB of expanded input and 16 GiB of prepared output, in addition to ordinary upload staging and CAS. Verified source components are reused in a bounded 12 GiB cache for the lifetime of the Server process.

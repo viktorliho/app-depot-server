@@ -217,7 +217,7 @@ export function AppShell({ app, children }: { app?: DepotApp; children: ReactNod
       <nav aria-label={app ? 'Application navigation' : 'Server navigation'}>{links.map(link => <NavLink key={link.to} to={link.to} end={link.end} className={({ isActive }) => `nav-link ${isActive ? 'nav-link-active' : ''}`}>{link.label}</NavLink>)}</nav>
       {!app && session.user.serverAdmin && <nav aria-label="Server administration"><span className="eyebrow">ADMINISTRATION</span>{[
         { to: '/admin/users', label: 'Users & Access' }, { to: '/admin/backups', label: 'Backups' },
-        { to: '/admin/diagnostics', label: 'Diagnostics' }, { to: '/admin/import-sources', label: 'Import Sources' }, { to: '/admin/settings', label: 'Server Settings' }
+        { to: '/admin/store', label: 'Store' }, { to: '/admin/diagnostics', label: 'Diagnostics' }, { to: '/admin/import-sources', label: 'Import Sources' }, { to: '/admin/settings', label: 'Server Settings' }
       ].map(link => <NavLink key={link.to} to={link.to} className={({ isActive }) => `nav-link ${isActive ? 'nav-link-active' : ''}`}>{link.label}</NavLink>)}</nav>}
       <div className="sidebar-bottom">{!app && canCreate && <Link to="/artifacts/new-app">Add Artifact to a new App</Link>}<ServerVersion /></div>
     </aside>

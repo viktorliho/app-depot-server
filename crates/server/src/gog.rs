@@ -78,17 +78,6 @@ impl Error {
     }
 }
 
-pub fn cleanup(root: &Path) -> io::Result<PathBuf> {
-    let dir = root.join("gog-work");
-    match fs::remove_dir_all(&dir) {
-        Ok(()) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
-    }
-    fs::DirBuilder::new().recursive(false).create(&dir)?;
-    Ok(dir)
-}
-
 fn safe_path(path: &str) -> bool {
     path.len() <= 1024
         && path.split('/').count() <= 64

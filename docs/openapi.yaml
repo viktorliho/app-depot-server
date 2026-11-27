@@ -2,8 +2,7 @@ openapi: 3.1.0
 info:
   title: App Depot Server API
   version: 1.0.0
-  description: 'Normative HTTP API v1. Semantics: api.md. No operation implies publication except
-    explicit publish.'
+  description: 'Normative HTTP API v1. Semantics: api.md. Store acquisition and enabled automatic updates request explicit Release publication after validation.'
 servers:
 - url: /api/v1
 security:
@@ -360,6 +359,202 @@ paths:
       security:
       - bearerAuth: []
       - cookieAuth: []
+  /admin/store:
+    get:
+      summary: Browse the accepted Store catalog
+      description: Requires Server Admin permission.
+      responses:
+        '200':
+          description: Browse the accepted Store catalog
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoreSnapshot'
+        '403':
+          description: Server Admin permission required
+      operationId: getStoreCatalog
+      tags:
+      - Store
+  /admin/store/refresh:
+    post:
+      summary: Refresh the trusted Store catalog
+      description: Requires Server Admin permission.
+      responses:
+        '200':
+          description: Refresh the trusted Store catalog
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoreSnapshot'
+        '403':
+          description: Server Admin permission required
+      operationId: refreshStoreCatalog
+      tags:
+      - Store
+  /admin/store/observations:
+    get:
+      summary: List observed applications and job status
+      description: Requires Server Admin permission.
+      responses:
+        '200':
+          description: List observed applications and job status
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StoreObservation'
+        '403':
+          description: Server Admin permission required
+      operationId: listStoreObservations
+      tags:
+      - Store
+  /admin/store/{id}/add:
+    post:
+      summary: Acquire a Store application
+      description: Requires Server Admin permission.
+      responses:
+        '202':
+          description: Acquire a Store application
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - id
+                properties:
+                  id:
+                    type: string
+        '403':
+          description: Server Admin permission required
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      operationId: addStoreApplication
+      tags:
+      - Store
+  /admin/store/{id}/adopt:
+    post:
+      summary: Adopt the latest catalog recipe revision
+      description: Requires Server Admin permission.
+      responses:
+        '202':
+          description: Adopt the latest catalog recipe revision
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - id
+                properties:
+                  id:
+                    type: string
+        '403':
+          description: Server Admin permission required
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      operationId: adoptStoreRecipe
+      tags:
+      - Store
+  /admin/store/{id}/check:
+    post:
+      summary: Queue an upstream component check
+      description: Requires Server Admin permission.
+      responses:
+        '202':
+          description: Queue an upstream component check
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - id
+                properties:
+                  id:
+                    type: string
+        '403':
+          description: Server Admin permission required
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      operationId: checkStoreUpdates
+      tags:
+      - Store
+  /admin/store/{id}/update:
+    post:
+      summary: Apply a detected upstream update once
+      description: Requires Server Admin permission.
+      responses:
+        '202':
+          description: Apply a detected upstream update once
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - id
+                properties:
+                  id:
+                    type: string
+        '403':
+          description: Server Admin permission required
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      operationId: applyStoreUpdate
+      tags:
+      - Store
+  /admin/store/{id}/observation:
+    put:
+      summary: Configure upstream observation
+      description: Requires Server Admin permission.
+      responses:
+        '204':
+          description: Configure upstream observation
+        '403':
+          description: Server Admin permission required
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - hours
+              - automatic
+              - enabled
+              additionalProperties: false
+              properties:
+                hours:
+                  type: integer
+                  minimum: 1
+                  maximum: 8760
+                enabled:
+                  type: boolean
+                automatic:
+                  type: boolean
+      operationId: configureStoreObservation
+      tags:
+      - Store
   /admin/diagnostics:
     get:
       operationId: getAdminDiagnostics
@@ -5404,6 +5599,80 @@ components:
       name: ad_session
       description: Web UI session. State-changing requests require X-CSRF-Token and Origin validation. HttpOnly and SameSite=Lax always; Secure on HTTPS.
   schemas:
+    StoreSnapshot:
+      type: object
+      required:
+      - generation
+      - recipes
+      properties:
+        generation:
+          type: integer
+        recipes:
+          type: array
+          items:
+            $ref: ../store/schemas/recipe.json
+    StoreObservation:
+      type: object
+      required:
+      - id
+      - title
+      - revision
+      - app
+      - release
+      - status
+      - enabled
+      - automatic
+      - hours
+      - lastCheck
+      - detected
+      - error
+      - filesDone
+      - filesTotal
+      - bytesDone
+      - bytesTotal
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        revision:
+          type: integer
+        app:
+          type:
+          - string
+          - 'null'
+        release:
+          type:
+          - string
+          - 'null'
+        status:
+          type: string
+        enabled:
+          type: boolean
+        automatic:
+          type: boolean
+        hours:
+          type: integer
+        lastCheck:
+          type:
+          - integer
+          - 'null'
+        detected:
+          type:
+          - string
+          - 'null'
+        error:
+          type:
+          - string
+          - 'null'
+        filesDone:
+          type: integer
+        filesTotal:
+          type: integer
+        bytesDone:
+          type: integer
+        bytesTotal:
+          type: integer
     SetupStatus:
       type: object
       properties:

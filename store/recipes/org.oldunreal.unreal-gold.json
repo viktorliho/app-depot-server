@@ -1,0 +1,140 @@
+{
+  "schema": "StoreRecipeV1",
+  "revision": 1,
+  "id": "org.oldunreal.unreal-gold",
+  "title": "Unreal Gold",
+  "upstream": "https://www.oldunreal.com/downloads/unreal/full-game-installers/",
+  "availability": "reviewRequired",
+  "platform": "linux-x86_64",
+  "version": "v227k_15",
+  "components": [
+    {
+      "name": "disc",
+      "url": "https://files.oldunreal.net/UNREAL_GOLD.ISO",
+      "bytes": 676734976,
+      "sha256": "7e360d0cc9e5533f38859819fd3cbfea7c475ecd428f9f433b5f8e1d5742cbca",
+      "format": "iso9660"
+    },
+    {
+      "name": "patch",
+      "url": "https://github.com/OldUnreal/Unreal-testing/releases/download/v227k_15/OldUnreal-UnrealPatch227k-Linux.tar.bz2",
+      "bytes": 131414620,
+      "sha256": "b04eba6d5c885c98bd9da8279840b15cd8fa06ed2b750235e7ad7aa26ef3f7a1",
+      "format": "tar.bz2",
+      "github": {
+        "repository": "OldUnreal/Unreal-testing",
+        "prefix": "OldUnreal-UnrealPatch",
+        "suffix": "-Linux.tar.bz2",
+        "previews": true,
+        "exclude": "-SDK-"
+      }
+    }
+  ],
+  "prepare": [
+    {
+      "component": "disc",
+      "from_prefix": "HELP/",
+      "to_prefix": "Help/",
+      "include": [
+        "**"
+      ],
+      "exclude": [],
+      "on_conflict": "reject"
+    },
+    {
+      "component": "disc",
+      "from_prefix": "MAPS/",
+      "to_prefix": "Maps/",
+      "include": [
+        "**"
+      ],
+      "exclude": [],
+      "on_conflict": "reject"
+    },
+    {
+      "component": "disc",
+      "from_prefix": "MUSIC/",
+      "to_prefix": "Music/",
+      "include": [
+        "**"
+      ],
+      "exclude": [],
+      "on_conflict": "reject"
+    },
+    {
+      "component": "disc",
+      "from_prefix": "SOUNDS/",
+      "to_prefix": "Sounds/",
+      "include": [
+        "**"
+      ],
+      "exclude": [],
+      "on_conflict": "reject"
+    },
+    {
+      "component": "disc",
+      "from_prefix": "SYSTEM/",
+      "to_prefix": "System/",
+      "include": [
+        "**"
+      ],
+      "exclude": [
+        "*.bat",
+        "*.dll",
+        "*.exe",
+        "*.int",
+        "*.ctt",
+        "*.det",
+        "*.elt",
+        "*.est",
+        "*.frt",
+        "*.itt",
+        "*.nlt",
+        "*.ptt",
+        "*.rut"
+      ],
+      "on_conflict": "reject"
+    },
+    {
+      "component": "disc",
+      "from_prefix": "TEXTURES/",
+      "to_prefix": "Textures/",
+      "include": [
+        "**"
+      ],
+      "exclude": [],
+      "on_conflict": "reject"
+    },
+    {
+      "component": "patch",
+      "from_prefix": "",
+      "to_prefix": "",
+      "include": [
+        "Help/**",
+        "Maps/**",
+        "Meshes/**",
+        "Music/**",
+        "Sounds/**",
+        "System/**",
+        "System64/**",
+        "SystemLocalized/**",
+        "Textures/**",
+        "WebServer/**"
+      ],
+      "exclude": [],
+      "on_conflict": "replace"
+    }
+  ],
+  "required": [
+    "Maps/Unreal.unr",
+    "System/Engine.u",
+    "System64/SDLDrv.so",
+    "System64/libSDL3.so.0"
+  ],
+  "launch": {
+    "path": "System64/unreal-bin-amd64",
+    "cwd": "System64",
+    "args": []
+  },
+  "rights": "OldUnreal supplies an official installer for the Unreal Gold disc image and its 227 patch. Permission for another server to redistribute the prepared retail assets has not been established."
+}

@@ -1256,7 +1256,7 @@ impl UploadPort for UploadAdapter {
             sqlx::query(
                 "UPDATE declaration_revisions SET data_json=? WHERE scope='Association' AND resource_id=?",
             ).bind(data).bind(&association_id).execute(&mut *tx).await.map_err(db)?;
-            crate::installation::seed_gog(
+            crate::installation::seed_import(
                 &mut tx,
                 &release_id,
                 &association_id,

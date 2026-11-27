@@ -217,6 +217,16 @@ fn prepare_inbox(managed: &Path) -> io::Result<(PathBuf, Option<File>)> {
     Ok((inbox_path, inbox_directory))
 }
 
+pub(crate) fn reset_scratch(dir: PathBuf) -> io::Result<PathBuf> {
+    match fs::remove_dir_all(&dir) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    fs::DirBuilder::new().recursive(false).create(&dir)?;
+    Ok(dir)
+}
+
 pub fn load_roots(data_root: &Path) -> Result<ImportSources, Box<dyn std::error::Error>> {
     let managed = data_root.canonicalize()?;
     let (inbox_path, inbox_directory) = prepare_inbox(&managed)?;
