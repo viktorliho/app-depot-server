@@ -1,5 +1,6 @@
 import { chromium } from 'playwright-core'
 import assert from 'node:assert/strict'
+import { writeFile } from 'node:fs/promises'
 
 const browser = await chromium.launch({
   executablePath:
@@ -56,6 +57,18 @@ try {
   await page.getByRole('checkbox', { name: /macOS/ }).uncheck()
   await page.getByRole('button', { name: 'Add to server' }).click()
   await page.getByRole('link', { name: 'Open application' }).waitFor()
+  await page.getByText('Downloading and verifying', { exact: true }).waitFor()
+  await page.reload()
+  await page.getByRole('button', { name: 'Activity', exact: true }).click()
+  await page.getByText('Downloading and verifying', { exact: true }).waitFor()
+  if (process.env.STORE_PROGRESS_SCREENSHOT) {
+    await page.screenshot({
+      path: process.env.STORE_PROGRESS_SCREENSHOT,
+      fullPage: true,
+    })
+  }
+  await writeFile(process.env.STORE_FIXTURE_RESUME, 'continue')
+  await page.getByRole('button', { name: 'My Store Apps', exact: true }).click()
   await page.getByText('Observation settings', { exact: true }).click()
   await page.getByLabel('Check interval (hours)').fill('8')
   await page.getByRole('button', { name: 'Save settings' }).click()
@@ -66,6 +79,17 @@ try {
   )
   await page.getByRole('button', { name: 'Check for updates' }).click()
   assert.equal(await page.getByRole('alert').count(), 0)
+  await page.goto(server + '/apps/' + process.env.STORE_FIXTURE_MANUAL_APP)
+  await page.getByText('Fetch metadata', { exact: true }).click()
+  await page.getByLabel('Application name or Steam App ID').fill('7654321')
+  await page.getByRole('button', { name: 'Search providers' }).click()
+  await page.getByRole('button', { name: /Store Fixture · 7654321/ }).click()
+  await page.getByRole('button', { name: 'Apply selected items' }).click()
+  await page.getByText('Selected metadata and artwork saved.').waitFor()
+  await page
+    .getByRole('heading', { name: 'Operator title', exact: true })
+    .first()
+    .waitFor()
 } finally {
   await browser.close()
 }

@@ -43,6 +43,11 @@ def run(root, binary):
         def do_GET(self):
             if self.path == "/payload.zip":
                 Handler.downloads += 1
+                if Handler.downloads == 1 and os.environ.get("STORE_BROWSER"):
+                    for _ in range(300):
+                        if (root/"browser-resume").exists():
+                            break
+                        time.sleep(.1)
                 if Handler.pause_next:
                     Handler.pause_next = False
                     Handler.blocked.set()
@@ -228,7 +233,7 @@ os.execv(os.environ["FIXTURE_REAL_CURL"],[os.environ["FIXTURE_REAL_CURL"],*sys.a
         assert (root/"rate-count").read_text() == "x"
         if os.environ.get("STORE_BROWSER"):
             subprocess.run(["node", repo / "web/tests/store-browser.mjs", server], check=True,
-                           env=dict(os.environ, STORE_FIXTURE_PASSWORD=password))
+                           env=dict(os.environ, STORE_FIXTURE_PASSWORD=password, STORE_FIXTURE_RESUME=str(root/"browser-resume"), STORE_FIXTURE_MANUAL_APP=manual["id"]))
         else:
             api("POST", "/admin/store/demo/add", {"platforms":["linux/x86_64"]})
         first = observation("Current")
