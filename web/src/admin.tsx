@@ -1,3 +1,4 @@
+import { MetadataSettings } from './enrichment'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { apiRequest, idempotencyKey, jsonBody, resource, type Diagnostics, type Page, type ServerSettings, type User } from './api'
 import { ActionLink, EmptyState, LoadingState, PageHeader, ProblemNotice, StatusBadge, TechnicalDetails } from './components'
@@ -141,5 +142,6 @@ export function ServerSettingsPage() {
       {error !== undefined && <ProblemNotice error={error} />}{notice && <p className="success-notice" role="status">{notice}</p>}
       <p className="subtle">TLS, proxy trust, data-root paths, container UID/GID and other deployment settings are configured outside this page and may require a container restart.</p>
     </section>}
+    <MetadataSettings/>
   </>
 }

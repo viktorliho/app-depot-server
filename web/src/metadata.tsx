@@ -1,3 +1,4 @@
+import { platforms } from './installation-review'
 import { useState, type FormEvent } from 'react'
 import { parseExactJson } from './api'
 
@@ -115,6 +116,13 @@ function build(text: string, scope: MetadataScope, draft: Draft): Record<string,
     assign(block, 'license', optionalString(draft.license, 'License', 160))
     assign(block, 'tags', optionalList(draft.tags, 'Tags'))
     assign(block, 'categories', optionalList(draft.categories, 'Categories'))
+    if (object(existing.metadataSources)) {
+      const sources = { ...existing.metadataSources }
+      for (const field of Object.keys(sources)) {
+        if (JSON.stringify(block[field]) !== JSON.stringify(existing[field])) delete sources[field]
+      }
+      block.metadataSources = sources
+    }
   } else if (scope === 'release') {
     assign(block, 'notes', optionalString(draft.notes, 'Release notes', 10000, true))
     assign(block, 'platforms', optionalList(draft.platforms, 'Platforms'))
@@ -159,7 +167,7 @@ export function StandardMetadataForm({ scope, documentText, editable, busy, onSa
       <label htmlFor="standard-kind">Kind</label><select id="standard-kind" value={['', 'Game', 'Application', 'Tool', 'Library', 'Content', 'Other'].includes(draft.kind) ? draft.kind : 'custom'} onChange={event => setDraft(current => ({ ...current, kind: event.target.value === 'custom' ? 'Custom' : event.target.value }))}><option value="">Unspecified</option>{['Game', 'Application', 'Tool', 'Library', 'Content', 'Other'].map(value => <option key={value}>{value}</option>)}<option value="custom">Custom…</option></select>
       {!['', 'Game', 'Application', 'Tool', 'Library', 'Content', 'Other'].includes(draft.kind) && field('kind', 'Custom kind')}
       {field('developer', 'Developer')}{field('publisher', 'Publisher')}{field('homepageUrl', 'Homepage URL', false, 'url')}{field('license', 'License')}{field('tags', 'Tags (one per line)', true)}{field('categories', 'Categories (one per line)', true)}</>}
-    {scope === 'release' && <>{field('notes', 'Release notes', true)}<fieldset><legend>Target platforms (optional)</legend><p className="subtle">Select useful presets or add one platform per line. Leave empty for unspecified.</p><div className="form-actions">{['windows/x86_64', 'linux/x86_64', 'linux/aarch64', 'macos/aarch64', 'macos/x86_64'].map(value => <label key={value}><input type="checkbox" checked={draft.platforms.split('\n').includes(value)} disabled={!editable} onChange={event => setDraft(current => ({ ...current, platforms: (event.target.checked ? [...current.platforms.split('\n').filter(Boolean), value] : current.platforms.split('\n').filter(item => item !== value)).join('\n') }))} />{value}</label>)}</div>{field('platforms', 'Platforms (one per line; custom values allowed)', true)}</fieldset>{field('runtimeName', 'Runtime name')}{field('runtimeVersion', 'Runtime version')}</>}
+    {scope === 'release' && <>{field('notes', 'Release notes', true)}<fieldset><legend>Target platforms (optional)</legend><p className="subtle">Select useful presets or add one platform per line. Leave empty for unspecified.</p><div className="form-actions">{platforms.map(value => <label key={value}><input type="checkbox" checked={draft.platforms.split('\n').includes(value)} disabled={!editable} onChange={event => setDraft(current => ({ ...current, platforms: (event.target.checked ? [...current.platforms.split('\n').filter(Boolean), value] : current.platforms.split('\n').filter(item => item !== value)).join('\n') }))} />{value}</label>)}</div>{field('platforms', 'Platforms (one per line; custom values allowed)', true)}</fieldset>{field('runtimeName', 'Runtime name')}{field('runtimeVersion', 'Runtime version')}</>}
     {scope === 'association' && <>{field('label', 'Artifact label')}{field('description', 'Description', true)}{field('purpose', 'Purpose')}</>}
     {error && <p role="alert">{error}</p>}
     {editable && <button className="button button-primary" disabled={busy}>{busy ? 'Saving…' : 'Save standard metadata'}</button>}

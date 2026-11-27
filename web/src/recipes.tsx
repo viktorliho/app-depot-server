@@ -1,3 +1,4 @@
+import { platforms } from './installation-review'
 import { useId, useRef, useState } from 'react'
 import { apiRequest, idempotencyKey, jsonBody, resource, type AppPage, type Association, type Channel, type DeclarationSnapshot, type DepotApp, type Page, type Release } from './api'
 import { ArtifactPicker, ResolvedTreePicker } from './artifact-browser'
@@ -7,7 +8,6 @@ import { useAuth } from './portal'
 import { useResource } from './use-resource'
 
 const enc = encodeURIComponent
-const platforms = ['linux/x86_64', 'linux/aarch64', 'windows/x86_64', 'windows/aarch64', 'macos/x86_64', 'macos/aarch64']
 const platformLabel = (platform: string) => {
   const [os, arch] = platform.split('/')
   const names: Record<string, string> = { linux: 'Linux', windows: 'Windows', macos: 'macOS' }

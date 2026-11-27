@@ -18,7 +18,7 @@ RUN APP_DEPOT_BUILD_VERSION="$APP_DEPOT_BUILD_VERSION" APP_DEPOT_BUILD_REVISION=
 
 FROM --platform=linux/amd64 debian:bookworm-slim
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates libsqlite3-0 libarchive13 unshield curl innoextract=1.9-0.1 \
+    && apt-get install -y --no-install-recommends ca-certificates libsqlite3-0 libarchive13 unshield 7zip curl innoextract=1.9-0.1 \
     && rm -rf /var/lib/apt/lists/*
 ARG APP_DEPOT_UID=10001
 ARG APP_DEPOT_GID=10001

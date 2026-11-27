@@ -695,3 +695,46 @@ remains in the content and observations but is omitted from the executable seque
 All Store endpoints require Server Admin. Browser mutations require the normal session CSRF token. GET /admin/store returns the accepted generation and recipe documents. POST /admin/store/refresh fetches a complete candidate catalog, validates it and atomically replaces the snapshot. An unavailable source, mismatched digest, unsupported schema or stale generation preserves the previous snapshot. POST /admin/store/{id}/add queues acquisition once per trusted source and recipe ID. Only available entries can be acquired. Licensing notices are informational. Acquisitions create private Apps.
 
 GET /admin/store/observations lists applied revisions, current App and Release IDs, detected versions, errors, last check (Unix seconds), job phase and settings. PUT /admin/store/{id}/observation accepts enabled, automatic and hours (1–8760, initially 24). POST /admin/store/{id}/check queues a manual check. POST /admin/store/{id}/update publishes a detected update once while retaining the observation settings. POST /admin/store/{id}/adopt explicitly adopts a newer recipe revision. Catalog refresh alone leaves the applied recipe pinned. A new tag or metadata-only revision with identical component bytes and preparation rules updates observation status without republishing. Adding a Store entry authorizes its first publication. Automatic publication of later updates defaults to disabled. The Store worker uses the ordinary BareTree upload, declaration and Release publication contracts.
+
+### Targeted releases and Store observations
+
+An optional `buildPlatform` on a new Release identifies its OS/CPU target
+through publication and historical installation resolution. Clients that choose
+a target explicitly can read the App's releases with `platform` and
+`order=published`; the first published result is the newest for that target.
+Legacy unscoped releases remain accessible through the unfiltered listing.
+The Desktop release picker currently lists declared releases with their
+versions and applies compatibility to each install action. A Client update can
+display target labels and use the target-scoped query to offer native and
+Windows-runtime choices separately. The existing Desktop core accepts six
+OS/CPU tokens (Windows, Linux and macOS on x86_64 or aarch64). It needs
+additional token support to parse linux/x86, windows/x86 and linux/ppc64le.
+OldUnreal macOS builds also require common resources at their documented
+Application Support location; V1 exposes this requirement in the resolved
+plan's unresolved items.
+
+Store add accepts a list of platform tokens and returns the logical product ID.
+Omitting the body selects all supported builds. Store observations expose their
+product and platform, the current and detected versions, and the last successful
+check. During acquisition their progress object carries the current stage,
+component, measured counts and optional total or download rate. An absent
+total indicates indeterminate work. Terminal activity is available from
+`GET /admin/store/activity`. Repeating add preserves existing builds.
+
+### Metadata and artwork providers
+
+Admins configure optional providers in Server Settings. Steam storefront
+descriptions and Steam CDN artwork work without an account. A verified Steam
+App ID binds catalog metadata to the upstream product. Store metadata supplies
+the title, publisher and summary when the storefront is unavailable. The
+Steam storefront endpoints are publicly accessible and can change independently
+of the Server. The Server caches bounded responses and validates image content
+before accepting it through normal App artwork storage. Catalog browsing can use
+these cached images before an App exists. Store acquisition fills missing App
+fields; operator-selected artwork survives further platform acquisitions.
+
+The App workspace supports provider search by name or ID, preview, selection
+of metadata fields, and individual artwork replacement. SteamGridDB is
+optional and requires an operator's personal key. Its key is written to a
+private Server configuration file. Settings return only a boolean indicating
+whether a key is present. Clients read accepted artwork from App Depot.

@@ -89,3 +89,17 @@ Publisher-authored prerequisites default to publisher evidence and use declared 
 3. Resolve the Windows x86_64 plan. Check the file count, logical size, package order and launch target. Browse the resulting layout and use search without opening a large JSON document.
 4. Open Artifacts and Launch from the same release. Verify relative paths, downloads and the launch editor. Repeat on a narrow window with the keyboard and the Explorer’s folder control.
 5. If intentionally editing metadata, verify that saving creates a new declaration revision for the published release and keeps the associated Tree identity.
+
+## Store and metadata
+
+Browse groups versions and supported targets on product cards. Details show
+platform selection, licensing and technical information. My Store Apps groups
+the acquired builds of a logical App and links to the regular App workspace.
+Activity shows active stages and recent outcomes. A failed catalog refresh
+keeps the last validated catalog on screen; its generation and last successful
+refresh are available under Catalog information.
+
+In the App workspace, Fetch metadata previews candidate fields and individual
+artwork roles. Select the desired fields or images before applying changes.
+The action preserves the library App name. Settings → Metadata providers
+controls provider access and the optional SteamGridDB credential.

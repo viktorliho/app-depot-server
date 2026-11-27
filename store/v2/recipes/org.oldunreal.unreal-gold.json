@@ -1,0 +1,792 @@
+{
+  "id": "org.oldunreal.unreal-gold",
+  "title": "Unreal Gold",
+  "upstream": "https://www.oldunreal.com/downloads/unreal/full-game-installers/",
+  "availability": "available",
+  "rights": "OldUnreal supplies an official installer for the Unreal Gold disc image and its 227 patch. Permission for another server to redistribute the prepared retail assets has not been established.",
+  "schema": "StoreRecipeV2",
+  "revision": 3,
+  "summary": "Explore Na Pali in the original Unreal and its Return to Na Pali expansion.",
+  "publisher": "OldUnreal",
+  "steamId": 13250,
+  "components": [
+    {
+      "name": "disc",
+      "url": "https://files.oldunreal.net/UNREAL_GOLD.ISO",
+      "bytes": 676734976,
+      "sha256": "7e360d0cc9e5533f38859819fd3cbfea7c475ecd428f9f433b5f8e1d5742cbca",
+      "format": "iso9660"
+    },
+    {
+      "name": "patch-linux",
+      "url": "https://github.com/OldUnreal/Unreal-testing/releases/download/v227k_15/OldUnreal-UnrealPatch227k-Linux.tar.bz2",
+      "bytes": 131414620,
+      "sha256": "b04eba6d5c885c98bd9da8279840b15cd8fa06ed2b750235e7ad7aa26ef3f7a1",
+      "format": "tar.bz2",
+      "github": {
+        "repository": "OldUnreal/Unreal-testing",
+        "prefix": "OldUnreal-UnrealPatch",
+        "suffix": "-Linux.tar.bz2",
+        "previews": true,
+        "exclude": "-SDK-"
+      }
+    },
+    {
+      "name": "patch-macos",
+      "url": "https://github.com/OldUnreal/Unreal-testing/releases/download/v227k_15/OldUnreal-UnrealPatch227k-macOS.dmg",
+      "bytes": 160874525,
+      "sha256": "58b98cf1b71901e706592d475ad3c92ac087ade2767f12da598c44aa219b9ab4",
+      "format": "dmg-hfs",
+      "github": {
+        "repository": "OldUnreal/Unreal-testing",
+        "prefix": "OldUnreal-UnrealPatch",
+        "suffix": "-macOS.dmg",
+        "previews": true,
+        "exclude": "-SDK-"
+      },
+      "subtree": "OldUnreal-UnrealPatch-227k/Unreal.app"
+    },
+    {
+      "name": "patch-windows",
+      "url": "https://github.com/OldUnreal/Unreal-testing/releases/download/v227k_15/OldUnreal-UnrealPatch227k-Windows.zip",
+      "bytes": 123650267,
+      "sha256": "88c49adef88e5a88c74f9fc80d89f0a2fe473d040578979aeb4425de32da12fc",
+      "format": "zip",
+      "github": {
+        "repository": "OldUnreal/Unreal-testing",
+        "prefix": "OldUnreal-UnrealPatch",
+        "suffix": "-Windows.zip",
+        "previews": true,
+        "exclude": "-SDK-"
+      }
+    }
+  ],
+  "builds": [
+    {
+      "platform": "linux/x86",
+      "version": "v227k_15",
+      "components": [
+        "disc",
+        "patch-linux"
+      ],
+      "prepare": [
+        {
+          "component": "disc",
+          "from_prefix": "HELP/",
+          "to_prefix": "Help/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "from_prefix": "MAPS/",
+          "to_prefix": "Maps/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "from_prefix": "MUSIC/",
+          "to_prefix": "Music/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "from_prefix": "SOUNDS/",
+          "to_prefix": "Sounds/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "from_prefix": "SYSTEM/",
+          "to_prefix": "System/",
+          "include": [
+            "**"
+          ],
+          "exclude": [
+            "*.bat",
+            "*.dll",
+            "*.exe",
+            "*.int",
+            "*.ctt",
+            "*.det",
+            "*.elt",
+            "*.est",
+            "*.frt",
+            "*.itt",
+            "*.nlt",
+            "*.ptt",
+            "*.rut"
+          ],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "from_prefix": "TEXTURES/",
+          "to_prefix": "Textures/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "patch-linux",
+          "from_prefix": "",
+          "to_prefix": "",
+          "include": [
+            "Help/**",
+            "Maps/**",
+            "Meshes/**",
+            "Music/**",
+            "Sounds/**",
+            "System/**",
+            "SystemLocalized/**",
+            "Textures/**",
+            "WebServer/**"
+          ],
+          "exclude": [],
+          "on_conflict": "replace"
+        }
+      ],
+      "required": [
+        "Maps/Unreal.unr",
+        "System/Engine.u",
+        "System/SDLDrv.so",
+        "System/unreal-bin-x86"
+      ],
+      "launch": {
+        "path": "System/unreal-bin-x86",
+        "cwd": "System",
+        "args": []
+      },
+      "verify_native": true
+    },
+    {
+      "platform": "linux/x86_64",
+      "version": "v227k_15",
+      "components": [
+        "disc",
+        "patch-linux"
+      ],
+      "prepare": [
+        {
+          "component": "disc",
+          "from_prefix": "HELP/",
+          "to_prefix": "Help/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "from_prefix": "MAPS/",
+          "to_prefix": "Maps/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "from_prefix": "MUSIC/",
+          "to_prefix": "Music/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "from_prefix": "SOUNDS/",
+          "to_prefix": "Sounds/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "from_prefix": "SYSTEM/",
+          "to_prefix": "System/",
+          "include": [
+            "**"
+          ],
+          "exclude": [
+            "*.bat",
+            "*.dll",
+            "*.exe",
+            "*.int",
+            "*.ctt",
+            "*.det",
+            "*.elt",
+            "*.est",
+            "*.frt",
+            "*.itt",
+            "*.nlt",
+            "*.ptt",
+            "*.rut"
+          ],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "from_prefix": "TEXTURES/",
+          "to_prefix": "Textures/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "patch-linux",
+          "from_prefix": "",
+          "to_prefix": "",
+          "include": [
+            "Help/**",
+            "Maps/**",
+            "Meshes/**",
+            "Music/**",
+            "Sounds/**",
+            "System/**",
+            "System64/**",
+            "SystemLocalized/**",
+            "Textures/**",
+            "WebServer/**"
+          ],
+          "exclude": [],
+          "on_conflict": "replace"
+        }
+      ],
+      "required": [
+        "Maps/Unreal.unr",
+        "System/Engine.u",
+        "System64/SDLDrv.so",
+        "System64/unreal-bin-amd64"
+      ],
+      "launch": {
+        "path": "System64/unreal-bin-amd64",
+        "cwd": "System64",
+        "args": []
+      },
+      "verify_native": true
+    },
+    {
+      "platform": "linux/aarch64",
+      "version": "v227k_15",
+      "components": [
+        "disc",
+        "patch-linux"
+      ],
+      "prepare": [
+        {
+          "component": "disc",
+          "from_prefix": "HELP/",
+          "to_prefix": "Help/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "from_prefix": "MAPS/",
+          "to_prefix": "Maps/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "from_prefix": "MUSIC/",
+          "to_prefix": "Music/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "from_prefix": "SOUNDS/",
+          "to_prefix": "Sounds/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "from_prefix": "SYSTEM/",
+          "to_prefix": "System/",
+          "include": [
+            "**"
+          ],
+          "exclude": [
+            "*.bat",
+            "*.dll",
+            "*.exe",
+            "*.int",
+            "*.ctt",
+            "*.det",
+            "*.elt",
+            "*.est",
+            "*.frt",
+            "*.itt",
+            "*.nlt",
+            "*.ptt",
+            "*.rut"
+          ],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "from_prefix": "TEXTURES/",
+          "to_prefix": "Textures/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "patch-linux",
+          "from_prefix": "",
+          "to_prefix": "",
+          "include": [
+            "Help/**",
+            "Maps/**",
+            "Meshes/**",
+            "Music/**",
+            "Sounds/**",
+            "System/**",
+            "SystemLocalized/**",
+            "Textures/**",
+            "WebServer/**",
+            "SystemARM64/**"
+          ],
+          "exclude": [],
+          "on_conflict": "replace"
+        }
+      ],
+      "required": [
+        "Maps/Unreal.unr",
+        "System/Engine.u",
+        "SystemARM64/SDLDrv.so",
+        "SystemARM64/unreal-bin-arm64"
+      ],
+      "launch": {
+        "path": "SystemARM64/unreal-bin-arm64",
+        "cwd": "SystemARM64",
+        "args": []
+      },
+      "verify_native": true
+    },
+    {
+      "platform": "macos/x86_64",
+      "version": "v227k_15",
+      "components": [
+        "disc",
+        "patch-macos"
+      ],
+      "prepare": [
+        {
+          "component": "disc",
+          "from_prefix": "MAPS/",
+          "to_prefix": "GameData/Maps/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "from_prefix": "MUSIC/",
+          "to_prefix": "GameData/Music/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "from_prefix": "SOUNDS/",
+          "to_prefix": "GameData/Sounds/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "from_prefix": "TEXTURES/",
+          "to_prefix": "GameData/Textures/",
+          "include": [
+            "**"
+          ],
+          "exclude": [
+            "UWindowFonts.utx"
+          ],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "patch-macos",
+          "from_prefix": "OldUnreal-UnrealPatch-227k/Unreal.app/",
+          "to_prefix": "Unreal.app/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        }
+      ],
+      "required": [
+        "Unreal.app/Contents/Info.plist",
+        "GameData/Maps/Unreal.unr",
+        "Unreal.app/Contents/MacOS/Unreal"
+      ],
+      "launch": {
+        "path": "Unreal.app/Contents/MacOS/Unreal",
+        "cwd": "Unreal.app/Contents/MacOS",
+        "args": []
+      },
+      "verify_native": true,
+      "unresolved": [
+        "OldUnreal requires the prepared GameData folders in ~/Library/Application Support/Unreal. The current client does not install content into this location."
+      ]
+    },
+    {
+      "platform": "macos/aarch64",
+      "version": "v227k_15",
+      "components": [
+        "disc",
+        "patch-macos"
+      ],
+      "prepare": [
+        {
+          "component": "disc",
+          "from_prefix": "MAPS/",
+          "to_prefix": "GameData/Maps/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "from_prefix": "MUSIC/",
+          "to_prefix": "GameData/Music/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "from_prefix": "SOUNDS/",
+          "to_prefix": "GameData/Sounds/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "from_prefix": "TEXTURES/",
+          "to_prefix": "GameData/Textures/",
+          "include": [
+            "**"
+          ],
+          "exclude": [
+            "UWindowFonts.utx"
+          ],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "patch-macos",
+          "from_prefix": "OldUnreal-UnrealPatch-227k/Unreal.app/",
+          "to_prefix": "Unreal.app/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        }
+      ],
+      "required": [
+        "Unreal.app/Contents/Info.plist",
+        "GameData/Maps/Unreal.unr",
+        "Unreal.app/Contents/MacOS/Unreal"
+      ],
+      "launch": {
+        "path": "Unreal.app/Contents/MacOS/Unreal",
+        "cwd": "Unreal.app/Contents/MacOS",
+        "args": []
+      },
+      "verify_native": true,
+      "unresolved": [
+        "OldUnreal requires the prepared GameData folders in ~/Library/Application Support/Unreal. The current client does not install content into this location."
+      ]
+    },
+    {
+      "platform": "windows/x86",
+      "version": "v227k_15",
+      "components": [
+        "disc",
+        "patch-windows"
+      ],
+      "prepare": [
+        {
+          "component": "disc",
+          "from_prefix": "HELP/",
+          "to_prefix": "Help/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "from_prefix": "MAPS/",
+          "to_prefix": "Maps/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "from_prefix": "MUSIC/",
+          "to_prefix": "Music/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "from_prefix": "SOUNDS/",
+          "to_prefix": "Sounds/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "from_prefix": "SYSTEM/",
+          "to_prefix": "System/",
+          "include": [
+            "**"
+          ],
+          "exclude": [
+            "*.bat",
+            "*.dll",
+            "*.exe",
+            "*.int",
+            "*.ctt",
+            "*.det",
+            "*.elt",
+            "*.est",
+            "*.frt",
+            "*.itt",
+            "*.nlt",
+            "*.ptt",
+            "*.rut"
+          ],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "from_prefix": "TEXTURES/",
+          "to_prefix": "Textures/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "patch-windows",
+          "from_prefix": "",
+          "to_prefix": "",
+          "include": [
+            "Help/**",
+            "Maps/**",
+            "Meshes/**",
+            "Music/**",
+            "Sounds/**",
+            "System/**",
+            "SystemLocalized/**",
+            "Textures/**",
+            "WebServer/**"
+          ],
+          "exclude": [],
+          "on_conflict": "replace"
+        }
+      ],
+      "required": [
+        "Maps/Unreal.unr",
+        "System/Engine.u",
+        "System/Unreal.exe"
+      ],
+      "launch": {
+        "path": "System/Unreal.exe",
+        "cwd": "System",
+        "args": []
+      },
+      "verify_native": true
+    },
+    {
+      "platform": "windows/x86_64",
+      "version": "v227k_15",
+      "components": [
+        "disc",
+        "patch-windows"
+      ],
+      "prepare": [
+        {
+          "component": "disc",
+          "from_prefix": "HELP/",
+          "to_prefix": "Help/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "from_prefix": "MAPS/",
+          "to_prefix": "Maps/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "from_prefix": "MUSIC/",
+          "to_prefix": "Music/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "from_prefix": "SOUNDS/",
+          "to_prefix": "Sounds/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "from_prefix": "SYSTEM/",
+          "to_prefix": "System/",
+          "include": [
+            "**"
+          ],
+          "exclude": [
+            "*.bat",
+            "*.dll",
+            "*.exe",
+            "*.int",
+            "*.ctt",
+            "*.det",
+            "*.elt",
+            "*.est",
+            "*.frt",
+            "*.itt",
+            "*.nlt",
+            "*.ptt",
+            "*.rut"
+          ],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "from_prefix": "TEXTURES/",
+          "to_prefix": "Textures/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "patch-windows",
+          "from_prefix": "",
+          "to_prefix": "",
+          "include": [
+            "Help/**",
+            "Maps/**",
+            "Meshes/**",
+            "Music/**",
+            "Sounds/**",
+            "System/**",
+            "System64/**",
+            "SystemLocalized/**",
+            "Textures/**",
+            "WebServer/**"
+          ],
+          "exclude": [],
+          "on_conflict": "replace"
+        }
+      ],
+      "required": [
+        "Maps/Unreal.unr",
+        "System/Engine.u",
+        "System64/Unreal.exe"
+      ],
+      "launch": {
+        "path": "System64/Unreal.exe",
+        "cwd": "System64",
+        "args": []
+      },
+      "verify_native": true
+    }
+  ],
+  "aliases": [
+    "Unreal Gold Edition"
+  ]
+}

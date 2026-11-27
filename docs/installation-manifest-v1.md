@@ -85,3 +85,19 @@ The resolution API reports the pinned revision’s localization alongside its se
 A future client should prompt only when a language selection changes the resolved files
 for the target platform. Installer UI languages and directory names do not establish
 the application language.
+
+## Symbolic links and client capabilities
+
+InstallationManifestV1 resolves Tree Identity v1 content. A Server preparing a
+selected application bundle must reject internal symbolic links, including links
+whose targets would be inside the bundle. This protects installers that only
+understand regular files and directories. A volume-level shortcut outside the
+selected bundle is outside the acquisition scope.
+
+Future support requires both a versioned tree identity and an installation
+contract that declares the required client capability. Resolution must account
+for the selected target platform, its path semantics, and the final layout after
+all artifact mappings. The installer must check containment of the entire link
+chain at materialization time. A Client without the capability cannot install
+such a plan. Existing v1 hashes, tree entries and installation declarations
+retain their current meanings. See [Tree Identity](tree-identity.md#future-relative-links).

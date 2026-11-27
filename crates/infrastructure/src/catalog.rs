@@ -145,13 +145,35 @@ pub async fn create_app(
     if permission == 0 {
         return Err(CatalogError::Forbidden);
     }
+    let app = insert_app(&mut tx, principal, name, kind).await?;
+    bind(
+        &mut tx,
+        &principal.id,
+        "CreateApp",
+        key,
+        &hash,
+        &app.id,
+        &app,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(app)
+}
+
+/// Caller must authorize creation before opening this transaction.
+pub async fn insert_app(
+    tx: &mut Transaction<'_, Sqlite>,
+    principal: &Principal,
+    name: &str,
+    kind: AppKind,
+) -> Result<App, CatalogError> {
     let id = Uuid::new_v4().to_string();
     let base = base_slug(name).unwrap_or_else(|| format!("app-{}", &id[..8]));
     let mut slug = base.clone();
     let mut suffix = 2;
     while sqlx::query_scalar::<_, i64>("SELECT count(*) FROM apps WHERE slug=?")
         .bind(&slug)
-        .fetch_one(&mut *tx)
+        .fetch_one(&mut **tx)
         .await?
         != 0
     {
@@ -164,9 +186,9 @@ pub async fn create_app(
         .bind(&slug)
         .bind(&principal.id)
         .bind(kind.as_str())
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
-    create_initial_declaration(&mut tx, "App", &id).await?;
+    create_initial_declaration(tx, "App", &id).await?;
     let app = App {
         id: id.clone(),
         name: name.into(),
@@ -176,8 +198,6 @@ pub async fn create_app(
         visibility: "Private".into(),
         state: "Draft".into(),
     };
-    bind(&mut tx, &principal.id, "CreateApp", key, &hash, &id, &app).await?;
-    tx.commit().await?;
     Ok(app)
 }
 
@@ -340,11 +360,18 @@ pub async fn create_release(
     key: &str,
     app_id: &str,
     version: Option<&str>,
+    build_platform: Option<&str>,
 ) -> Result<Release, CatalogError> {
     if key.is_empty() || key.len() > 255 {
         return Err(CatalogError::Invalid);
     }
-    let hash = input_hash(&(app_id, version))?;
+    if build_platform.is_some_and(|target| !app_depot_domain::recipe::platform(target)) {
+        return Err(CatalogError::Invalid);
+    }
+    let hash = match build_platform {
+        Some(target) => input_hash(&(app_id, version, target))?,
+        None => input_hash(&(app_id, version))?,
+    };
     let mut tx = pool.begin().await?;
     let retired: i64 = sqlx::query_scalar("SELECT count(*) FROM idempotency_tombstones WHERE principal_id=? AND action='CreateRelease' AND key=?")
         .bind(&principal.id).bind(key).fetch_one(&mut *tx).await?;
@@ -363,18 +390,29 @@ pub async fn create_release(
         return Err(CatalogError::NotFound);
     }
     let id = Uuid::new_v4().to_string();
-    sqlx::query("INSERT INTO releases(id, app_id, version) VALUES(?, ?, ?)")
+    sqlx::query("INSERT INTO releases(id, app_id, version, build_platform) VALUES(?, ?, ?, ?)")
         .bind(&id)
         .bind(app_id)
         .bind(version)
+        .bind(build_platform)
         .execute(&mut *tx)
         .await?;
     create_initial_declaration(&mut tx, "Release", &id).await?;
+    if let Some(platform) = build_platform {
+        crate::declarations::append(
+            &mut tx,
+            "Release",
+            &id,
+            &serde_json::json!({"appDepot":{"platforms":[platform]}}),
+        )
+        .await?;
+    }
     let release = Release {
         id: id.clone(),
         app_id: app_id.into(),
         state: "Draft".into(),
         version: version.map(str::to_owned),
+        build_platform: build_platform.map(str::to_owned),
     };
     bind(
         &mut tx,
@@ -395,7 +433,7 @@ pub async fn get_release(
     principal: Option<&Principal>,
     id: &str,
 ) -> Result<(Release, i64), CatalogError> {
-    let row = sqlx::query("SELECT r.id, r.app_id, r.version, r.state, r.etag_version, a.owner_id, a.visibility FROM releases r JOIN apps a ON a.id=r.app_id WHERE r.id=?")
+    let row = sqlx::query("SELECT r.id, r.app_id, r.version, r.build_platform, r.state, r.etag_version, a.owner_id, a.visibility FROM releases r JOIN apps a ON a.id=r.app_id WHERE r.id=?")
         .bind(id).fetch_optional(pool).await?.ok_or(CatalogError::NotFound)?;
     let owner: String = row.try_get("owner_id")?;
     let anonymous_enabled = if principal.is_none() {
@@ -422,6 +460,7 @@ pub async fn get_release(
             id: row.try_get("id")?,
             app_id: row.try_get("app_id")?,
             state: row.try_get("state")?,
+            build_platform: row.try_get("build_platform")?,
             version: row.try_get("version")?,
         },
         row.try_get("etag_version")?,
@@ -433,18 +472,20 @@ pub async fn list_releases(
     principal: Option<&Principal>,
     app_id: &str,
     published: bool,
+    platform: Option<&str>,
 ) -> Result<Vec<Release>, CatalogError> {
     let (app, _) = get_app(pool, principal, app_id).await?;
     let full = principal
         .map(|actor| actor.may_manage(&app.owner_id))
         .unwrap_or(false);
-    let rows = sqlx::query("SELECT id, app_id, version, state FROM releases WHERE app_id=? AND (?=1 OR state='Published') ORDER BY CASE WHEN ? THEN publication_order END DESC, id")
-        .bind(app_id).bind(full && !published).bind(published).fetch_all(pool).await?;
+    let rows = sqlx::query("SELECT id, app_id, version, build_platform, state FROM releases WHERE app_id=? AND (? IS NULL OR build_platform=?) AND (?=1 OR state='Published') ORDER BY CASE WHEN ? THEN publication_order END DESC, id")
+        .bind(app_id).bind(platform).bind(platform).bind(full && !published).bind(published).fetch_all(pool).await?;
     rows.into_iter()
         .map(|row| {
             Ok(Release {
                 id: row.try_get("id")?,
                 app_id: row.try_get("app_id")?,
+                build_platform: row.try_get("build_platform")?,
                 version: row.try_get("version")?,
                 state: row.try_get("state")?,
             })
@@ -461,7 +502,7 @@ pub async fn patch_release(
 ) -> Result<(Release, i64), CatalogError> {
     let validator = if_match.ok_or(CatalogError::PreconditionRequired)?;
     let mut tx = pool.begin().await?;
-    let row = sqlx::query("SELECT r.app_id, r.version, r.state, r.etag_version, a.owner_id FROM releases r JOIN apps a ON a.id=r.app_id WHERE r.id=?")
+    let row = sqlx::query("SELECT r.app_id, r.version, r.build_platform, r.state, r.etag_version, a.owner_id FROM releases r JOIN apps a ON a.id=r.app_id WHERE r.id=?")
         .bind(id).fetch_optional(&mut *tx).await?.ok_or(CatalogError::NotFound)?;
     if !principal.may_manage(&row.try_get::<String, _>("owner_id")?) {
         return Err(CatalogError::NotFound);
@@ -484,6 +525,7 @@ pub async fn patch_release(
         app_id: row.try_get("app_id")?,
         state: row.try_get("state")?,
         version: visible_version,
+        build_platform: row.try_get("build_platform")?,
     };
     tx.commit().await?;
     Ok((release, version + 1))
@@ -959,7 +1001,7 @@ pub async fn publish_release(
         return Ok((release, version));
     }
     let validator = if_match.ok_or(CatalogError::PreconditionRequired)?;
-    let row = sqlx::query("SELECT r.app_id, r.version, r.state, r.etag_version, a.owner_id, a.kind FROM releases r JOIN apps a ON a.id=r.app_id WHERE r.id=?")
+    let row = sqlx::query("SELECT r.app_id, r.version, r.build_platform, r.state, r.etag_version, a.owner_id, a.kind FROM releases r JOIN apps a ON a.id=r.app_id WHERE r.id=?")
         .bind(release_id).fetch_optional(&mut *tx).await?.ok_or(CatalogError::NotFound)?;
     let owner: String = row.try_get("owner_id")?;
     if !principal.may_manage(&owner) {
@@ -1012,6 +1054,7 @@ pub async fn publish_release(
         id: release_id.into(),
         app_id,
         state: "Published".into(),
+        build_platform: row.try_get("build_platform")?,
         version: row.try_get("version")?,
     };
     bind(
@@ -1080,7 +1123,7 @@ mod tests {
             create_app(&pool, &user, "app-key", "Other", Default::default()).await,
             Err(CatalogError::IdempotencyConflict)
         ));
-        let release = create_release(&pool, &user, "rel-key", &app.id, None)
+        let release = create_release(&pool, &user, "rel-key", &app.id, None, None)
             .await
             .unwrap();
         assert!(matches!(
@@ -1113,7 +1156,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        let second = create_release(&pool, &user, "second-release", &app.id, None)
+        let second = create_release(&pool, &user, "second-release", &app.id, None, None)
             .await
             .unwrap();
         let associated =
@@ -1286,10 +1329,10 @@ mod tests {
         )
         .await
         .unwrap();
-        let first = create_release(&pool, &actor, "deletion-first", &app.id, None)
+        let first = create_release(&pool, &actor, "deletion-first", &app.id, None, None)
             .await
             .unwrap();
-        let second = create_release(&pool, &actor, "deletion-second", &app.id, None)
+        let second = create_release(&pool, &actor, "deletion-second", &app.id, None, None)
             .await
             .unwrap();
         let bytes = b"shared CAS content";
@@ -1528,10 +1571,10 @@ mod tests {
         )
         .await
         .unwrap();
-        let published = create_release(&pool, &actor, "delete-release-create", &app.id, None)
+        let published = create_release(&pool, &actor, "delete-release-create", &app.id, None, None)
             .await
             .unwrap();
-        let draft = create_release(&pool, &actor, "delete-draft-create", &app.id, None)
+        let draft = create_release(&pool, &actor, "delete-draft-create", &app.id, None, None)
             .await
             .unwrap();
         let bytes = b"published file";

@@ -1,4 +1,4 @@
-import { platformName } from './installation-review'
+import { platformName, platforms as buildPlatforms } from './installation-review'
 import { InstallationConfiguration } from './installation'
 import { depot, fileSize, GogInstallation, ReleaseLaunches, record, strings, text } from './release-information'
 import { RecipeSection } from './recipes'
@@ -110,23 +110,25 @@ export function NewRelease() {
   const app = useOutletContext<DepotApp>()
   const { state } = useAuth()
   const navigate = useNavigate()
+  const [platform, setPlatform] = useState('')
   const [version, setVersion] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<unknown>()
-  const attempt = useRef<{ version: string; key: string } | null>(null)
+  const attempt = useRef<{ version: string; platform: string; key: string } | null>(null)
   const allowed = canManage(app, state.session!.user)
   async function create(event: FormEvent) {
     event.preventDefault()
-    if (!attempt.current || attempt.current.version !== version) attempt.current = { version, key: idempotencyKey() }
+    if (!attempt.current || attempt.current.version !== version || attempt.current.platform !== platform) attempt.current = { version, platform, key: idempotencyKey() }
     setBusy(true); setError(undefined)
     try {
       const result = await apiRequest<Release>(`/apps/${app.id}/releases`, { method: 'POST', authenticated: true,
-        csrf: state.session!.csrfToken, idempotencyKey: attempt.current.key, ...jsonBody({ version: version.trim() || null }) })
+        csrf: state.session!.csrfToken, idempotencyKey: attempt.current.key, ...jsonBody({ version: version.trim() || null, buildPlatform: platform || undefined }) })
       navigate(`/apps/${app.id}/releases/${result.value.id}`, { replace: true })
     } catch (failure) { setError(failure) } finally { setBusy(false) }
   }
   return <><PageHeader title="Create Draft release" description={app.kind === 'derived' ? `Add a release to ${app.name} and configure its installation recipe.` : `Add a release to ${app.name}. A version and artifact are optional until publication.`} />
     {!allowed ? <ProblemNotice error={new Error('Only the owner or Server Admin can create a release here.')} /> : <section className="panel form-panel"><form className="form-stack" onSubmit={create}>
+      <label>Build platform<select value={platform} onChange={event => setPlatform(event.target.value)}><option value="">Unspecified</option>{buildPlatforms.map(value => <option key={value} value={value}>{platformName(value)}</option>)}</select></label>
       <label>Version (optional)<input value={version} onChange={event => setVersion(event.target.value)} /></label>
       {error !== undefined && <ProblemNotice error={error} />}
       <button className="button button-primary" disabled={busy}>{busy ? 'Creating…' : 'Create Draft release'}</button>

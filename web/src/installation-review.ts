@@ -1,3 +1,4 @@
+export const platforms = ['windows/x86_64', 'windows/x86', 'windows/aarch64', 'linux/x86_64', 'linux/x86', 'linux/aarch64', 'linux/ppc64le', 'macos/x86_64', 'macos/aarch64']
 export const publisherEvidence = 'Added manually by publisher. Execution order follows the configured App Depot plan.'
 
 export function platformName(value: string) {

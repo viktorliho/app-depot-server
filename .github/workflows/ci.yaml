@@ -24,7 +24,7 @@ jobs:
       - name: Prepare public Inno Setup test fixtures
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends innoextract libarchive-dev unshield
+          sudo apt-get install -y --no-install-recommends innoextract libarchive-dev unshield 7zip
           sh crates/server/tests/fixtures/prepare-gog.sh "$RUNNER_TEMP/gog-fixtures"
           printf 'GOG_TEST_FIXTURES=%s\n' "$RUNNER_TEMP/gog-fixtures" >> "$GITHUB_ENV"
       - run: cargo test --workspace --locked
@@ -33,7 +33,7 @@ jobs:
       - run: npm --prefix web ci
       - run: npm --prefix web run test:unit
       - run: npm --prefix web run build
-      - run: target/debug/app-depot-server validate-store store
+      - run: target/debug/app-depot-server validate-store store/v2
       - run: STORE_BROWSER=1 python3 store/tests/observed.py target/debug/app-depot-server
       - run: npm --prefix web run smoke:lan-http
         timeout-minutes: 7

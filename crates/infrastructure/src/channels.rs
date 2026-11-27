@@ -265,10 +265,10 @@ mod tests {
         let app = create_app(&pool, &actor, "channel-app", "Channels", Default::default())
             .await
             .unwrap();
-        let first = create_release(&pool, &actor, "channel-first", &app.id, None)
+        let first = create_release(&pool, &actor, "channel-first", &app.id, None, None)
             .await
             .unwrap();
-        let second = create_release(&pool, &actor, "channel-second", &app.id, None)
+        let second = create_release(&pool, &actor, "channel-second", &app.id, None, None)
             .await
             .unwrap();
         assert!(matches!(

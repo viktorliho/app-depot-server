@@ -27,6 +27,10 @@ pub struct Recipe {
     pub prepare: Vec<Step>,
     pub required: Vec<String>,
     pub launch: Launch,
+    #[serde(default)]
+    pub verify_native: bool,
+    #[serde(default)]
+    pub unresolved: Vec<String>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -36,6 +40,8 @@ pub struct Component {
     pub sha256: String,
     pub bytes: u64,
     pub format: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtree: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub discovery: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -83,7 +89,7 @@ pub(super) fn identifier(s: &str) -> bool {
                     .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
         })
 }
-fn path(s: &str) -> bool {
+pub(super) fn path(s: &str) -> bool {
     s.len() <= 1024
         && s.split('/').count() <= 32
         && !s.chars().any(char::is_control)
@@ -111,8 +117,8 @@ impl Recipe {
             || self.version.trim().is_empty()
             || self.version.len() > 128
             || self.revision > i64::MAX as u64
-            || self.schema != "StoreRecipeV1"
-            || self.platform != "linux-x86_64"
+            || self.schema != "StoreRecipeV2"
+            || !app_depot_domain::recipe::platform(&self.platform)
             || !matches!(self.availability.as_str(), "available" | "reviewRequired")
             || self.title.trim().is_empty()
             || self.title.len() > 160
@@ -127,6 +133,11 @@ impl Recipe {
                 .sum::<u128>()
                 > 16 * 1024u128.pow(3)
             || !(1..=128).contains(&self.prepare.len())
+            || self.unresolved.len() > 16
+            || self
+                .unresolved
+                .iter()
+                .any(|s| s.is_empty() || s.len() > 1024)
             || self.required.len() > 128
             || self.required.iter().any(|s| !path(s))
             || !path(&self.launch.path)
@@ -157,11 +168,13 @@ impl Recipe {
                         || g.suffix.is_empty()
                 })
                 || c.discovery.as_ref().is_some_and(|u| !https(u))
+                || (c.format == "dmg-hfs") != c.subtree.is_some()
+                || c.subtree.as_deref().is_some_and(|s| !path(s))
                 || !valid_digest(&c.sha256)
                 || !(1..=8 * 1024u64.pow(3)).contains(&c.bytes)
                 || !matches!(
                     c.format.as_str(),
-                    "iso9660" | "7z" | "tar.bz2" | "zip" | "raw"
+                    "iso9660" | "dmg-hfs" | "7z" | "tar.bz2" | "zip" | "raw"
                 )
             {
                 return Err(invalid());
@@ -214,7 +227,11 @@ impl Recipe {
     }
 }
 
-pub(super) fn download(c: &Component, dest: &Path) -> io::Result<()> {
+pub(super) fn download(
+    c: &Component,
+    dest: &Path,
+    mut transferred: impl FnMut(u64),
+) -> io::Result<()> {
     let mut child = Command::new("curl")
         .args([
             "--disable",
@@ -252,6 +269,7 @@ pub(super) fn download(c: &Component, dest: &Path) -> io::Result<()> {
             if n > c.bytes {
                 return Err(invalid());
             }
+            transferred(n);
             hash.update(&buf[..count]);
             out.write_all(&buf[..count])?;
         }
@@ -485,6 +503,7 @@ fn unpack(
     out: &Path,
     budget: &mut u64,
     count: &mut usize,
+    mut report_bytes: impl FnMut(u64),
 ) -> io::Result<Vec<String>> {
     let engine = std::env::current_exe()?;
     #[cfg(test)]
@@ -516,6 +535,8 @@ fn unpack(
     )?;
     let mut child = command.spawn()?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(600);
+    let mut last_sample = std::time::Instant::now();
+    let counters = format!("/proc/{}/io", child.id());
     let status = loop {
         if let Some(status) = child.try_wait()? {
             break status;
@@ -524,6 +545,15 @@ fn unpack(
             let _ = child.kill();
             let _ = child.wait();
             return Err(invalid());
+        }
+        if last_sample.elapsed() >= std::time::Duration::from_secs(1) {
+            if let Some(bytes) = fs::read_to_string(&counters).ok().and_then(|s| {
+                s.lines()
+                    .find_map(|l| l.strip_prefix("wchar: ")?.parse::<u64>().ok())
+            }) {
+                report_bytes(bytes);
+            }
+            last_sample = std::time::Instant::now();
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     };
@@ -544,7 +574,11 @@ fn unpack(
     Ok(names)
 }
 
-fn cached_component(c: &Component, scratch: &Path) -> io::Result<PathBuf> {
+fn cached_component(
+    c: &Component,
+    scratch: &Path,
+    report: &mut impl FnMut(&str, u64),
+) -> io::Result<PathBuf> {
     let cache = scratch.join("store-components");
     if !cache.is_dir() {
         fs::create_dir(&cache)?;
@@ -552,6 +586,7 @@ fn cached_component(c: &Component, scratch: &Path) -> io::Result<PathBuf> {
     fs::set_permissions(&cache, fs::Permissions::from_mode(0o700))?;
     let dest = cache.join(&c.sha256);
     if dest.is_file() {
+        report("Verifying cached component", 0);
         let mut file = File::open(&dest)?;
         let mut hash = Sha256::new();
         if file.metadata()?.len() == c.bytes
@@ -580,12 +615,17 @@ fn cached_component(c: &Component, scratch: &Path) -> io::Result<PathBuf> {
     }
     let pending = tempfile::tempdir_in(scratch)?;
     let blob = pending.path().join("download");
-    download(c, &blob)?;
+    report("Downloading and verifying", 0);
+    download(c, &blob, |n| report("Downloading and verifying", n))?;
     fs::rename(blob, &dest)?;
     Ok(dest)
 }
 
-pub fn prepare(recipe: &Recipe, scratch: &Path) -> io::Result<(TempDir, PathBuf)> {
+pub fn prepare(
+    recipe: &Recipe,
+    scratch: &Path,
+    mut report: impl FnMut(&str, &str, usize, u64, Option<u64>),
+) -> io::Result<(TempDir, PathBuf)> {
     recipe.validate()?;
     let work = tempfile::Builder::new()
         .prefix("store-")
@@ -595,17 +635,31 @@ pub fn prepare(recipe: &Recipe, scratch: &Path) -> io::Result<(TempDir, PathBuf)
     let mut entries = HashMap::new();
     let mut budget = 16 * 1024u64.pow(3);
     let mut count = 50000;
-    for c in &recipe.components {
+    for (index, c) in recipe.components.iter().enumerate() {
         let root = work.path().join(format!("component-{}", c.name));
         fs::create_dir(&root)?;
-        let blob = cached_component(c, scratch).map_err(|error| {
-            io::Error::other(format!("Acquisition of {} failed: {error}", c.name))
-        })?;
-        let files = if c.format == "raw" {
+        let blob = cached_component(c, scratch, &mut |stage, n| {
+            report(stage, &c.name, index, n, Some(c.bytes))
+        })
+        .map_err(|error| io::Error::other(format!("Acquisition of {} failed: {error}", c.name)))?;
+        report("Extracting component", &c.name, index, 0, None);
+        let files = if let Some(subtree) = &c.subtree {
+            crate::store_dmg::extract(
+                &blob,
+                subtree,
+                &root,
+                &mut budget,
+                &mut count,
+                |n, total| report("Extracting files", &c.name, index, n, Some(total)),
+            )?
+        } else if c.format == "raw" {
             fs::hard_link(blob, root.join(&c.name))?;
             vec![c.name.clone()]
         } else {
-            unpack(&blob, &c.format, &root, &mut budget, &mut count).map_err(|error| {
+            unpack(&blob, &c.format, &root, &mut budget, &mut count, |n| {
+                report("Extracting component", &c.name, index, n, None)
+            })
+            .map_err(|error| {
                 io::Error::other(format!("Archive validation failed for {}: {error}", c.name))
             })?
         };
@@ -620,6 +674,7 @@ pub fn prepare(recipe: &Recipe, scratch: &Path) -> io::Result<(TempDir, PathBuf)
         let contents = if groups.is_empty() {
             (root, files)
         } else {
+            report("Extracting InstallShield groups", &c.name, index, 0, None);
             crate::store_cab::extract(&root, &files, groups, work.path(), &mut budget, &mut count)?
         };
         entries.insert(&c.name, contents);
@@ -657,7 +712,14 @@ pub fn prepare(recipe: &Recipe, scratch: &Path) -> io::Result<(TempDir, PathBuf)
         target.set_permissions(fs::Permissions::from_mode(mode))?;
         Ok(())
     };
-    for step in &recipe.prepare {
+    for (index, step) in recipe.prepare.iter().enumerate() {
+        report(
+            "Preparing files",
+            step.component.as_deref().unwrap_or(""),
+            recipe.components.len(),
+            index as u64,
+            Some(recipe.prepare.len() as u64),
+        );
         let replace = step.on_conflict == "replace";
         if step.operation == "copy" {
             copy(
@@ -705,6 +767,7 @@ pub fn prepare(recipe: &Recipe, scratch: &Path) -> io::Result<(TempDir, PathBuf)
             }
         }
     }
+    report("Validating output", "", recipe.components.len(), 0, None);
     for required in recipe
         .required
         .iter()
@@ -718,6 +781,9 @@ pub fn prepare(recipe: &Recipe, scratch: &Path) -> io::Result<(TempDir, PathBuf)
     }
     if !output.join(&recipe.launch.cwd).is_dir() {
         return Err(invalid());
+    }
+    if recipe.verify_native {
+        crate::store_binary::verify(&output.join(&recipe.launch.path), &recipe.platform)?;
     }
     fs::set_permissions(
         output.join(&recipe.launch.path),
@@ -734,7 +800,9 @@ mod tests {
     #[ignore = "requires STORE_RECIPE and STORE_VERIFIED_MEDIA with individually acquired components"]
     async fn prepare_verified_media() {
         let bytes = fs::read(std::env::var_os("STORE_RECIPE").unwrap()).unwrap();
-        let recipe: Recipe = serde_json::from_slice(&bytes).unwrap();
+        let target = std::env::var("STORE_PLATFORM").unwrap_or_else(|_| "linux/x86_64".into());
+        let recipe = crate::store::verification_build(&bytes, &target)
+            .unwrap_or_else(|_| panic!("Invalid Store recipe or target {target}"));
         let media = PathBuf::from(std::env::var_os("STORE_VERIFIED_MEDIA").unwrap());
         let scratch = tempfile::tempdir_in(media.parent().unwrap()).unwrap();
         let cache = scratch.path().join("store-components");
@@ -742,13 +810,8 @@ mod tests {
         for c in &recipe.components {
             fs::hard_link(media.join(&c.sha256), cache.join(&c.sha256)).unwrap();
         }
-        let (_work, payload) = prepare(&recipe, scratch.path()).unwrap();
-        let mut signature = [0; 4];
-        File::open(payload.join(&recipe.launch.path))
-            .unwrap()
-            .read_exact(&mut signature)
-            .unwrap();
-        assert_eq!(&signature, b"\x7fELF");
+        let (_work, payload) = prepare(&recipe, scratch.path(), |_, _, _, _, _| {}).unwrap();
+        crate::store_binary::verify(&payload.join(&recipe.launch.path), &target).unwrap();
         // No listener is started. Validate private local import and installation
         // resolution without making licensed media available to other users.
         use crate::{
@@ -810,7 +873,7 @@ mod tests {
             Some(&principal),
             &release,
             &installation::Request {
-                platform: "linux/x86_64".into(),
+                platform: recipe.platform.clone(),
                 selections: Default::default(),
                 revision_id: None,
                 manifest: None,

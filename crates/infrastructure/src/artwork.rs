@@ -45,6 +45,8 @@ pub struct Artwork {
     pub id: String,
     pub digest: String,
     pub mime_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_url: Option<String>,
     pub size: u64,
     pub width: u32,
     pub height: u32,
@@ -73,6 +75,7 @@ fn from_row(row: sqlx::sqlite::SqliteRow) -> Result<Artwork, CatalogError> {
         role: row.try_get("role")?,
         id: id.clone(),
         digest: row.try_get("digest")?,
+        source_url: row.try_get("source_url")?,
         mime_type: row.try_get("mime_type")?,
         size: row.try_get::<i64, _>("size")? as u64,
         width: row.try_get::<i64, _>("width")? as u32,
@@ -179,6 +182,10 @@ struct PreparedImage<'a> {
     height: u32,
 }
 
+pub fn validate_provider_image(role: &str, bytes: &[u8]) -> Result<&'static str, CatalogError> {
+    Ok(prepare_image(role, bytes)?.mime)
+}
+
 fn prepare_image<'a>(role: &str, bytes: &'a [u8]) -> Result<PreparedImage<'a>, CatalogError> {
     fn image_error(error: image::ImageError) -> CatalogError {
         match error {
@@ -282,6 +289,24 @@ pub async fn put(
     validator: Option<&str>,
     bytes: &[u8],
 ) -> Result<Artwork, CatalogError> {
+    put_with_source(
+        pool, root, principal, key, app_id, role, validator, bytes, None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn put_with_source(
+    pool: &SqlitePool,
+    root: &Path,
+    principal: &Principal,
+    key: &str,
+    app_id: &str,
+    role: &str,
+    validator: Option<&str>,
+    bytes: &[u8],
+    source_url: Option<&str>,
+) -> Result<Artwork, CatalogError> {
     if !valid_role(role) || key.is_empty() || key.len() > 255 {
         return Err(CatalogError::Invalid);
     }
@@ -297,7 +322,10 @@ pub async fn put(
         height,
     } = prepare_image(role, bytes)?;
     let digest = format!("{:x}", Sha256::digest(stored_bytes.as_ref()));
-    let hash = request_hash(app_id, role, validator, &digest);
+    let mut hash = request_hash(app_id, role, validator, &digest);
+    if let Some(source) = source_url {
+        hash = format!("{:x}", Sha256::digest(format!("{hash}:{source}")));
+    }
     if let Some(item) = replay(pool, principal, "ArtworkPut", key, &hash).await? {
         return Ok(item);
     }
@@ -327,6 +355,7 @@ pub async fn put(
         &digest,
         &hash,
         &claim_id,
+        source_url,
     )
     .await;
     // The drop guard also clears a claim if the request future is cancelled.
@@ -353,6 +382,7 @@ async fn put_claimed(
     digest: &str,
     hash: &str,
     claim_id: &str,
+    source_url: Option<&str>,
 ) -> Result<Artwork, CatalogError> {
     let stage = root.join("ops").join(format!("artwork-{claim_id}"));
     let write_result = (|| -> std::io::Result<()> {
@@ -423,13 +453,14 @@ async fn put_claimed(
         id: id.clone(),
         digest: digest.into(),
         mime_type: mime.into(),
+        source_url: source_url.map(str::to_owned),
         size: bytes.len() as u64,
         width,
         height,
         etag: catalog::etag("artwork", &id, version),
     };
-    sqlx::query("INSERT INTO artwork_bindings(app_id, role, id, etag_version, digest, mime_type, size, width, height) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(app_id, role) DO UPDATE SET etag_version=excluded.etag_version, digest=excluded.digest, mime_type=excluded.mime_type, size=excluded.size, width=excluded.width, height=excluded.height")
-        .bind(app_id).bind(role).bind(&id).bind(version).bind(digest).bind(mime).bind(bytes.len() as i64).bind(width as i64).bind(height as i64).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO artwork_bindings(app_id, role, id, etag_version, digest, mime_type, size, width, height, source_url) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(app_id, role) DO UPDATE SET etag_version=excluded.etag_version, digest=excluded.digest, mime_type=excluded.mime_type, size=excluded.size, width=excluded.width, height=excluded.height,source_url=excluded.source_url")
+        .bind(app_id).bind(role).bind(&id).bind(version).bind(digest).bind(mime).bind(bytes.len() as i64).bind(width as i64).bind(height as i64).bind(source_url).execute(&mut *tx).await?;
     sqlx::query("INSERT INTO idempotency_bindings(principal_id, action, key, input_hash, result_id, result_json, created_at) VALUES(?, 'ArtworkPut', ?, ?, ?, ?, ?)")
         .bind(&principal.id).bind(key).bind(hash).bind(app_id).bind(serde_json::to_string(&item)?).bind(now()).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM artwork_claims WHERE id=?")

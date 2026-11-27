@@ -17,7 +17,8 @@ use std::{
 };
 use tokio::sync::Semaphore;
 
-const OFFICIAL: &str = "https://raw.githubusercontent.com/viktorliho/app-depot-server/main/store";
+const OFFICIAL: &str =
+    "https://raw.githubusercontent.com/viktorliho/app-depot-server/main/store/v2";
 const LIMIT: usize = 256 * 1024;
 
 #[derive(Deserialize)]
@@ -84,6 +85,115 @@ fn digest(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Product {
+    schema: String,
+    id: String,
+    revision: u64,
+    title: String,
+    summary: String,
+    publisher: String,
+    upstream: String,
+    availability: String,
+    rights: String,
+    steam_id: Option<u32>,
+    #[serde(default)]
+    aliases: Vec<String>,
+    components: Vec<crate::store_prepare::Component>,
+    builds: Vec<Build>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Build {
+    platform: String,
+    version: String,
+    components: Vec<String>,
+    prepare: Vec<crate::store_prepare::Step>,
+    required: Vec<String>,
+    launch: crate::store_prepare::Launch,
+    #[serde(default)]
+    verify_native: bool,
+    #[serde(default)]
+    unresolved: Vec<String>,
+}
+impl Product {
+    fn parse(value: &Value) -> Result<Self, ApiError> {
+        let p: Self = serde_json::from_value(value.clone()).map_err(|_| invalid())?;
+        let unique: HashSet<_> = p.components.iter().map(|c| &c.name).collect();
+        let platforms: HashSet<_> = p.builds.iter().map(|b| &b.platform).collect();
+        if p.schema != "StoreRecipeV2"
+            || p.builds.is_empty()
+            || p.builds.len() > 16
+            || unique.len() != p.components.len()
+            || unique.len() > 64
+            || platforms.len() != p.builds.len()
+            || p.summary.trim().is_empty()
+            || p.summary.len() > 2048
+            || p.publisher.trim().is_empty()
+            || p.publisher.len() > 160
+            || p.aliases.len() > 16
+            || p.aliases
+                .iter()
+                .any(|v| v.trim().is_empty() || v.len() > 160 || v.chars().any(char::is_control))
+            || p.steam_id == Some(0)
+        {
+            return Err(invalid());
+        }
+        for b in &p.builds {
+            p.build(b)?.validate().map_err(|_| invalid())?;
+        }
+        if unique
+            .iter()
+            .any(|n| !p.builds.iter().any(|b| b.components.contains(n)))
+        {
+            return Err(invalid());
+        }
+        Ok(p)
+    }
+    fn build(&self, b: &Build) -> Result<Recipe, ApiError> {
+        let components = b
+            .components
+            .iter()
+            .map(|id| {
+                self.components
+                    .iter()
+                    .find(|c| c.name == *id)
+                    .cloned()
+                    .ok_or_else(invalid)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Recipe {
+            schema: self.schema.clone(),
+            id: self.id.clone(),
+            revision: self.revision,
+            title: self.title.clone(),
+            upstream: self.upstream.clone(),
+            availability: self.availability.clone(),
+            rights: self.rights.clone(),
+            platform: b.platform.clone(),
+            version: b.version.clone(),
+            components,
+            prepare: b.prepare.clone(),
+            required: b.required.clone(),
+            launch: b.launch.clone(),
+            verify_native: b.verify_native,
+            unresolved: b.unresolved.clone(),
+        })
+    }
+}
+#[cfg(test)]
+pub(super) fn verification_build(raw: &[u8], target: &str) -> Result<Recipe, ApiError> {
+    let product = Product::parse(&serde_json::from_slice(raw).map_err(|_| invalid())?)?;
+    product.build(
+        product
+            .builds
+            .iter()
+            .find(|b| b.platform == target)
+            .ok_or_else(invalid)?,
+    )
+}
+
 fn snapshot(
     base: &str,
     read: impl Fn(&str) -> Result<Vec<u8>, ApiError>,
@@ -114,7 +224,7 @@ fn snapshot(
         }
         let recipe: Value = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
         if recipe["id"] != entry.id
-            || recipe["schema"] != "StoreRecipeV1"
+            || recipe["schema"] != "StoreRecipeV2"
             || recipe["revision"].as_u64().unwrap_or(0) == 0
             || !matches!(
                 recipe["availability"].as_str(),
@@ -123,8 +233,7 @@ fn snapshot(
         {
             return Err(invalid());
         }
-        let parsed: Recipe = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
-        parsed.validate().map_err(|_| invalid())?;
+        Product::parse(&recipe)?;
         recipes.push(recipe);
     }
     Ok((index.generation, digest(&raw), recipes))
@@ -157,6 +266,7 @@ pub(crate) struct Store {
     scratch: Arc<tempfile::TempDir>,
     refresh: Arc<Semaphore>,
     base: String,
+    providers: crate::enrichment::Providers,
 }
 
 async fn admin(state: &Store, headers: &HeaderMap, write: bool) -> Result<(), ApiError> {
@@ -168,15 +278,17 @@ async fn admin(state: &Store, headers: &HeaderMap, write: bool) -> Result<(), Ap
 
 async fn list(State(state): State<Store>, headers: HeaderMap) -> Result<Json<Value>, ApiError> {
     admin(&state, &headers, false).await?;
-    let cached: Option<(i64, String)> =
-        sqlx::query_as("SELECT generation,recipes FROM store_catalogs WHERE source=?")
+    let cached: Option<(i64, String, Option<i64>)> =
+        sqlx::query_as("SELECT generation,recipes,refreshed_at FROM store_catalogs WHERE source=?")
             .bind(&state.base)
             .fetch_optional(&state.auth.pool)
             .await
             .map_err(CatalogError::Sql)?;
-    let (generation, recipes) = cached.unwrap_or((0, "[]".into()));
+    let (generation, recipes, refreshed_at) = cached.unwrap_or((0, "[]".into(), None));
     let recipes: Value = serde_json::from_str(&recipes).map_err(|_| ApiError::server())?;
-    Ok(Json(json!({"generation":generation,"recipes":recipes})))
+    Ok(Json(
+        json!({"generation":generation,"recipes":recipes,"source":state.base,"refreshedAt":refreshed_at}),
+    ))
 }
 
 async fn refresh(State(state): State<Store>, headers: HeaderMap) -> Result<Json<Value>, ApiError> {
@@ -222,10 +334,10 @@ async fn refresh(State(state): State<Store>, headers: HeaderMap) -> Result<Json<
             }
         }
     }
-    sqlx::query("INSERT INTO store_catalogs(source,generation,digest,recipes) VALUES(?,?,?,?) ON CONFLICT(source) DO UPDATE SET generation=excluded.generation,digest=excluded.digest,recipes=excluded.recipes")
+    sqlx::query("INSERT INTO store_catalogs(source,generation,digest,recipes,refreshed_at) VALUES(?,?,?,?,unixepoch()) ON CONFLICT(source) DO UPDATE SET generation=excluded.generation,digest=excluded.digest,recipes=excluded.recipes,refreshed_at=unixepoch()")
         .bind(&state.base).bind(generation).bind(hash).bind(json!(recipes).to_string()).execute(&mut *tx).await.map_err(CatalogError::Sql)?;
     tx.commit().await.map_err(CatalogError::Sql)?;
-    Ok(Json(json!({"generation":generation,"recipes":recipes})))
+    list(State(state), headers).await
 }
 
 use crate::{
@@ -252,18 +364,101 @@ async fn cached_recipe(state: &Store, id: &str) -> Result<Value, ApiError> {
     Ok(recipe)
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Selection {
+    platforms: Vec<String>,
+}
 async fn add(
     State(s): State<Store>,
     Path(id): Path<String>,
     h: HeaderMap,
+    body: axum::body::Bytes,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let actor = authorize(&s.auth, &h, true).await?;
     if !actor.server_admin {
         return Err(CatalogError::Forbidden.into());
     }
-    let recipe = cached_recipe(&s, &id).await?;
-    sqlx::query("INSERT INTO store_observations(source,id,owner,recipe) VALUES(?,?,?,?) ON CONFLICT(source,id) DO NOTHING").bind(&s.base).bind(&id).bind(actor.id).bind(recipe.to_string()).execute(&s.auth.pool).await.map_err(CatalogError::Sql)?;
-    Ok((StatusCode::ACCEPTED, Json(json!({"id":id}))))
+    let product = Product::parse(&cached_recipe(&s, &id).await?)?;
+    let selected = if body.is_empty() {
+        product.builds.iter().map(|b| b.platform.clone()).collect()
+    } else {
+        if body.len() > 4096 {
+            return Err(invalid());
+        }
+        serde_json::from_slice::<Selection>(&body)
+            .map_err(|_| invalid())?
+            .platforms
+    };
+    if selected.is_empty()
+        || selected.len() > product.builds.len()
+        || selected.iter().collect::<HashSet<_>>().len() != selected.len()
+    {
+        return Err(invalid());
+    }
+    let mut tx = s
+        .auth
+        .pool
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(CatalogError::Sql)?;
+    let existing: Option<String> =
+        sqlx::query_scalar("SELECT app FROM store_products WHERE source=? AND id=?")
+            .bind(&s.base)
+            .bind(&id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(CatalogError::Sql)?;
+    let new = existing.is_none();
+    let app = if let Some(app) = existing {
+        app
+    } else {
+        let app = catalog::insert_app(
+            &mut tx,
+            &actor,
+            &product.title,
+            app_depot_domain::AppKind::Standard,
+        )
+        .await?;
+        sqlx::query("INSERT INTO store_products(source,id,app) VALUES(?,?,?)")
+            .bind(&s.base)
+            .bind(&id)
+            .bind(&app.id)
+            .execute(&mut *tx)
+            .await
+            .map_err(CatalogError::Sql)?;
+        app.id
+    };
+    let (enabled, automatic, hours): (bool,bool,i64) = sqlx::query_as("SELECT enabled,automatic,hours FROM store_observations WHERE source=? AND product=? ORDER BY id LIMIT 1")
+        .bind(&s.base).bind(&id).fetch_optional(&mut *tx).await.map_err(CatalogError::Sql)?.unwrap_or((true,false,24));
+    for target in selected {
+        let build = product.build(
+            product
+                .builds
+                .iter()
+                .find(|b| b.platform == target)
+                .ok_or_else(invalid)?,
+        )?;
+        let key = format!("{}@{}", id, target.replace('/', "-"));
+        sqlx::query("INSERT INTO store_observations(source,id,product,platform,owner,recipe,app,enabled,automatic,hours) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(source,id) DO NOTHING").bind(&s.base).bind(key).bind(&id).bind(target).bind(&actor.id).bind(json!(build).to_string()).bind(&app).bind(enabled).bind(automatic).bind(hours).execute(&mut *tx).await.map_err(CatalogError::Sql)?;
+    }
+    tx.commit().await.map_err(CatalogError::Sql)?;
+    if new {
+        let service = s.providers.clone();
+        let app = app.clone();
+        tokio::spawn(async move {
+            service
+                .fill(
+                    &actor,
+                    &app,
+                    product.steam_id,
+                    &product.summary,
+                    &product.publisher,
+                )
+                .await;
+        });
+    }
+    Ok((StatusCode::ACCEPTED, Json(json!({"id":id,"app":app}))))
 }
 async fn adopt(
     State(s): State<Store>,
@@ -271,7 +466,21 @@ async fn adopt(
     h: HeaderMap,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     admin(&s, &h, true).await?;
-    let recipe = cached_recipe(&s, &id).await?;
+    let (product, platform): (String, String) =
+        sqlx::query_as("SELECT product,platform FROM store_observations WHERE source=? AND id=?")
+            .bind(&s.base)
+            .bind(&id)
+            .fetch_optional(&s.auth.pool)
+            .await
+            .map_err(CatalogError::Sql)?
+            .ok_or(CatalogError::NotFound)?;
+    let p = Product::parse(&cached_recipe(&s, &product).await?)?;
+    let recipe = json!(p.build(
+        p.builds
+            .iter()
+            .find(|b| b.platform == platform)
+            .ok_or_else(invalid)?
+    )?);
     let result=sqlx::query("UPDATE store_observations SET recipe=?,pending=NULL,apply_once=0,status='Queued' WHERE source=? AND id=? AND json_extract(recipe,'$.revision')<? AND status IN ('Current','Failed','Update available')").bind(recipe.to_string()).bind(&s.base).bind(&id).bind(recipe["revision"].as_i64().ok_or_else(invalid)?).execute(&s.auth.pool).await.map_err(CatalogError::Sql)?;
     if result.rows_affected() == 0 {
         return Err(CatalogError::Conflict.into());
@@ -283,6 +492,12 @@ async fn adopt(
 struct Observation {
     id: String,
     title: String,
+    product: String,
+    platform: String,
+    current_version: Option<String>,
+    successful_check: Option<i64>,
+    #[serde(serialize_with = "serialize_progress")]
+    progress: Option<String>,
     revision: i64,
     app: Option<String>,
     release: Option<String>,
@@ -298,13 +513,30 @@ struct Observation {
     bytes_done: i64,
     bytes_total: i64,
 }
+fn serialize_progress<S: serde::Serializer>(
+    raw: &Option<String>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    let value = raw
+        .as_deref()
+        .map(serde_json::from_str::<Value>)
+        .transpose()
+        .map_err(serde::ser::Error::custom)?;
+    serde::Serialize::serialize(&value, serializer)
+}
+
+async fn activity(State(state): State<Store>, headers: HeaderMap) -> Result<Json<Value>, ApiError> {
+    admin(&state, &headers, false).await?;
+    let rows=sqlx::query("SELECT build,title,platform,status,error,finished FROM store_activity WHERE source=? ORDER BY sequence DESC LIMIT 64").bind(&state.base).fetch_all(&state.auth.pool).await.map_err(CatalogError::Sql)?;
+    Ok(Json(json!(rows.into_iter().map(|r|json!({"id":r.get::<String,_>("build"),"title":r.get::<String,_>("title"),"platform":r.get::<String,_>("platform"),"status":r.get::<String,_>("status"),"error":r.get::<Option<String>,_>("error"),"finished":r.get::<i64,_>("finished")})).collect::<Vec<_>>())))
+}
 async fn observed(
     State(state): State<Store>,
     headers: HeaderMap,
 ) -> Result<Json<Vec<Observation>>, ApiError> {
     admin(&state, &headers, false).await?;
     let rows = sqlx::query_as(
-        "SELECT id,json_extract(recipe,'$.title') title,json_extract(recipe,'$.revision') revision,
+        "SELECT id,product,platform,progress,successful_check,(SELECT version FROM releases WHERE id=store_observations.release) current_version,json_extract(recipe,'$.title') title,json_extract(recipe,'$.revision') revision,
                 app,release,enabled,automatic,hours,status,last_check,detected,error,files_done,files_total,bytes_done,bytes_total
                 FROM store_observations WHERE source=? ORDER BY title",
     )
@@ -332,13 +564,14 @@ async fn settings(
         return Err(invalid());
     }
     let result = sqlx::query(
-        "UPDATE store_observations SET enabled=?,automatic=?,hours=? WHERE source=? AND id=?",
+        "UPDATE store_observations SET enabled=?,automatic=?,hours=? WHERE source=? AND (id=? OR product=?)",
     )
     .bind(input.enabled)
     .bind(input.automatic)
     .bind(input.hours)
     .bind(&s.base)
-    .bind(id)
+    .bind(&id)
+    .bind(&id)
     .execute(&s.auth.pool)
     .await
     .map_err(CatalogError::Sql)?;
@@ -458,7 +691,7 @@ fn discover(
             {
                 let temp = tempfile::tempdir_in(scratch)
                     .map_err(|_| "Verification staging unavailable")?;
-                crate::store_prepare::download(component, &temp.path().join("verify"))
+                crate::store_prepare::download(component, &temp.path().join("verify"), |_| {})
                     .map_err(|_| "Pinned resource changed or download failed")?;
             }
             validators[&component.name] = identity;
@@ -530,11 +763,11 @@ pub(super) fn association_metadata(source: &str, recipe: &Recipe) -> Value {
             "store": {
                 "source": source, "recipeId": recipe.id, "revision": recipe.revision,
                 "version": recipe.version, "components": recipe.components,
-                "rights": recipe.rights, "upstream": recipe.upstream
+                "rights": recipe.rights, "upstream": recipe.upstream,"unresolved":recipe.unresolved
             },
             "entryPoints": [{
                 "id":"store-launch", "target":{"type":"TreeFile","path":recipe.launch.path},
-                "platforms":["linux/x86_64"],
+                "platforms":[recipe.platform],
                 "launch":{"method":"NativePortableV1","arguments":recipe.launch.args,"workingDirectory":recipe.launch.cwd}
             }]
         }
@@ -562,7 +795,7 @@ async fn run(s: &Store, r: sqlx::sqlite::SqliteRow) -> Result<(), String> {
         .transpose()
         .map_err(|_| DB)?;
     let scratch = s.scratch.clone();
-    cached_recipe(s, &id)
+    cached_recipe(s, r.get("product"))
         .await
         .map_err(|_| "Catalog entry unavailable or pending recipe review")?;
     let (recipe, validators) = if let Some(pending) = r.get::<Option<String>, _>("pending") {
@@ -577,7 +810,7 @@ async fn run(s: &Store, r: sqlx::sqlite::SqliteRow) -> Result<(), String> {
     let components: Vec<_> = recipe
         .components
         .iter()
-        .map(|c| (&c.name, &c.format, c.bytes, &c.sha256))
+        .map(|c| (&c.name, &c.format, &c.subtree, c.bytes, &c.sha256))
         .collect();
     let inputs = (
         &recipe.platform,
@@ -585,6 +818,8 @@ async fn run(s: &Store, r: sqlx::sqlite::SqliteRow) -> Result<(), String> {
         &recipe.prepare,
         &recipe.required,
         &recipe.launch,
+        recipe.verify_native,
+        &recipe.unresolved,
     );
     let fingerprint = digest(&serde_json::to_vec(&inputs).map_err(|_| "Invalid build inputs")?);
     let app: Option<String> = r.get("app");
@@ -592,7 +827,10 @@ async fn run(s: &Store, r: sqlx::sqlite::SqliteRow) -> Result<(), String> {
         && r.get::<Option<String>, _>("fingerprint").as_ref() == Some(&fingerprint)
     {
         "Current"
-    } else if app.is_some() && !r.get::<bool, _>("automatic") && !r.get::<bool, _>("apply_once") {
+    } else if r.get::<Option<String>, _>("release").is_some()
+        && !r.get::<bool, _>("automatic")
+        && !r.get::<bool, _>("apply_once")
+    {
         "Update available"
     } else {
         "Preparing"
@@ -610,7 +848,7 @@ async fn run(s: &Store, r: sqlx::sqlite::SqliteRow) -> Result<(), String> {
     .map_err(|_| DB)?;
     if status == "Current" {
         sqlx::query(
-            "UPDATE store_observations SET apply_once=0,validators=? WHERE source=? AND id=?",
+            "UPDATE store_observations SET successful_check=unixepoch(),progress=NULL,apply_once=0,validators=? WHERE source=? AND id=?",
         )
         .bind(validators.to_string())
         .bind(&s.base)
@@ -624,8 +862,24 @@ async fn run(s: &Store, r: sqlx::sqlite::SqliteRow) -> Result<(), String> {
     }
     let recipe_copy = recipe.clone();
     let scratch = s.scratch.clone();
-    let (_work, output) =
-        tokio::task::spawn_blocking(move || prepare(&recipe_copy, scratch.path()))
+    let progress_pool = pool.clone();
+    let source = s.base.clone();
+    let row_id = id.clone();
+    let (_work, output) =tokio::task::spawn_blocking(move || {
+        let mut previous=String::new();
+        let mut phase_start=std::time::Instant::now();
+        let mut last=std::time::Instant::now();
+        prepare(&recipe_copy,scratch.path(),|stage,component,index,done,total|{
+            if previous==stage && last.elapsed()<std::time::Duration::from_millis(750){return;}
+            if previous!=stage || done==0 {phase_start=std::time::Instant::now();}
+            previous=stage.to_owned();
+            last=std::time::Instant::now();
+            let seconds=phase_start.elapsed().as_secs_f64();
+            let rate=(stage=="Downloading and verifying" && seconds>=1.0 && done>0).then(||(done as f64/seconds) as u64);
+            let progress=json!({"bytesPerSecond":rate,"stage":stage,"component":component,"componentsDone":index,"componentsTotal":recipe_copy.components.len(),"done":done,"total":total});
+            let _=tokio::runtime::Handle::current().block_on(sqlx::query("UPDATE store_observations SET progress=? WHERE source=? AND id=?").bind(progress.to_string()).bind(&source).bind(&row_id).execute(&progress_pool));
+        })
+    })
             .await
             .map_err(|_| "Preparation worker failed")?
             .map_err(|error| error.to_string())?;
@@ -650,12 +904,14 @@ async fn run(s: &Store, r: sqlx::sqlite::SqliteRow) -> Result<(), String> {
         },
     };
     let metadata = association_metadata(&s.base, &recipe);
-    sqlx::query("UPDATE store_observations SET status='Importing' WHERE source=? AND id=?")
-        .bind(&s.base)
-        .bind(&id)
-        .execute(pool)
-        .await
-        .map_err(|_| DB)?;
+    sqlx::query(
+        "UPDATE store_observations SET progress=NULL,status='Importing' WHERE source=? AND id=?",
+    )
+    .bind(&s.base)
+    .bind(&id)
+    .execute(pool)
+    .await
+    .map_err(|_| DB)?;
     let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(16);
     let import = async {
         let result = import_store_tree(&s.import, &actor, root, target, &key, metadata, &tx).await;
@@ -692,15 +948,22 @@ async fn run(s: &Store, r: sqlx::sqlite::SqliteRow) -> Result<(), String> {
         .await
         .map_err(|_| "Release unavailable")?;
     if record.state == "Draft" {
-        cached_recipe(s, &id)
+        cached_recipe(s, r.get("product"))
             .await
             .map_err(|_| "Catalog entry unavailable or pending recipe review")?;
+        sqlx::query("UPDATE store_observations SET progress=? WHERE source=? AND id=?")
+            .bind(json!({"stage":"Validating installation declaration"}).to_string())
+            .bind(&s.base)
+            .bind(&id)
+            .execute(pool)
+            .await
+            .map_err(|_| DB)?;
         installation::resolve(
             pool,
             Some(&actor),
             &release,
             &installation::Request {
-                platform: "linux/x86_64".into(),
+                platform: recipe.platform.clone(),
                 selections: Default::default(),
                 revision_id: None,
                 manifest: None,
@@ -717,6 +980,13 @@ async fn run(s: &Store, r: sqlx::sqlite::SqliteRow) -> Result<(), String> {
         )
         .await
         .map_err(|_| "Release version update failed")?;
+        sqlx::query("UPDATE store_observations SET progress=? WHERE source=? AND id=?")
+            .bind(json!({"stage":"Publishing release"}).to_string())
+            .bind(&s.base)
+            .bind(&id)
+            .execute(pool)
+            .await
+            .map_err(|_| DB)?;
         catalog::publish_release(
             pool,
             &actor,
@@ -727,7 +997,7 @@ async fn run(s: &Store, r: sqlx::sqlite::SqliteRow) -> Result<(), String> {
         .await
         .map_err(|_| "Release publication failed")?;
     }
-    sqlx::query("UPDATE store_observations SET status='Current',apply_once=0,pending=NULL,validators=?,fingerprint=?,app=?,release=? WHERE source=? AND id=?").bind(validators.to_string()).bind(fingerprint).bind(result.app_id).bind(release).bind(&s.base).bind(id).execute(pool).await.map_err(|_|DB)?;
+    sqlx::query("UPDATE store_observations SET successful_check=unixepoch(),progress=NULL,status='Current',apply_once=0,pending=NULL,validators=?,fingerprint=?,app=?,release=? WHERE source=? AND id=?").bind(validators.to_string()).bind(fingerprint).bind(result.app_id).bind(release).bind(&s.base).bind(id).execute(pool).await.map_err(|_|DB)?;
     Ok(())
 }
 
@@ -756,13 +1026,18 @@ pub(crate) async fn worker(s: Store, boundary: Arc<tokio::sync::RwLock<()>>) {
     }
 }
 
-pub fn router(import: ImportState, work: &std::path::Path) -> std::io::Result<(Router, Store)> {
+pub fn router(
+    import: ImportState,
+    work: &std::path::Path,
+    providers: crate::enrichment::Providers,
+) -> std::io::Result<(Router, Store)> {
     let scratch = Arc::new(
         tempfile::Builder::new()
             .prefix("store-worker-")
             .tempdir_in(work)?,
     );
     let state = Store {
+        providers,
         auth: import.auth.clone(),
         import,
         scratch,
@@ -771,6 +1046,7 @@ pub fn router(import: ImportState, work: &std::path::Path) -> std::io::Result<(R
     };
     let router = Router::new()
         .route("/admin/store", get(list))
+        .route("/admin/store/activity", get(activity))
         .route("/admin/store/refresh", post(refresh))
         .route("/admin/store/{id}/add", post(add))
         .route("/admin/store/observations", get(observed))

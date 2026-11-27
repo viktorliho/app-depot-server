@@ -1,0 +1,1101 @@
+{
+  "id": "org.oldunreal.unreal-tournament-2004-ece",
+  "title": "Unreal Tournament 2004 ECE",
+  "upstream": "https://www.oldunreal.com/downloads/ut2004/full-game-installers/",
+  "availability": "available",
+  "rights": "OldUnreal provides the ECE full-game installer and maintains patches under an agreement with Epic. The patch license file enumerates third-party components. Permission to distribute the prepared full game from another server has not been established. https://github.com/OldUnreal/UT2004Patches/blob/main/LICENSE.md",
+  "schema": "StoreRecipeV2",
+  "revision": 3,
+  "summary": "Vehicle and arena combat featuring Onslaught and Assault.",
+  "publisher": "OldUnreal",
+  "steamId": 13230,
+  "components": [
+    {
+      "name": "disc",
+      "url": "https://files.oldunreal.net/UT2004.ISO",
+      "bytes": 2995322880,
+      "sha256": "43e9182ae20bcbc0f6f4588fee6c1b336c261f1465403118a1973b09b1a22541",
+      "format": "iso9660"
+    },
+    {
+      "name": "patch-linux",
+      "url": "https://github.com/OldUnreal/UT2004Patches/releases/download/3374-rc3/OldUnreal-UT2004Patch3374-Linux-fc0484d6.tar.bz2",
+      "bytes": 59191321,
+      "sha256": "d79eb45fda3ace2b7a68e6a0b9730b7d6602004b111e0b16f3f7cc28f3111572",
+      "format": "tar.bz2",
+      "github": {
+        "repository": "OldUnreal/UT2004Patches",
+        "prefix": "OldUnreal-UT2004Patch",
+        "suffix": ".tar.bz2",
+        "previews": true
+      }
+    },
+    {
+      "name": "patch-macos",
+      "url": "https://github.com/OldUnreal/UT2004Patches/releases/download/3374-rc3/OldUnreal-UT2004Patch3374-macOS.dmg",
+      "bytes": 61235839,
+      "sha256": "8c9bd030127c2fd37c2565aad59cb5f4dbb696909e01c1cb975aecf7e38b8e7c",
+      "format": "dmg-hfs",
+      "github": {
+        "repository": "OldUnreal/UT2004Patches",
+        "prefix": "OldUnreal-UT2004Patch",
+        "suffix": "-macOS.dmg",
+        "previews": true
+      },
+      "subtree": "OldUnreal-UT2004Patch-3374/UT2004.app"
+    },
+    {
+      "name": "patch-windows",
+      "url": "https://github.com/OldUnreal/UT2004Patches/releases/download/3374-rc3/OldUnreal-UT2004Patch3374-Windows-d906d39a.zip",
+      "bytes": 47460147,
+      "sha256": "16bd65fcf736163e1f00fbb9404a492489bea6869d87496dcd15c2fed4d96dd2",
+      "format": "zip",
+      "github": {
+        "repository": "OldUnreal/UT2004Patches",
+        "prefix": "OldUnreal-UT2004Patch",
+        "suffix": ".zip",
+        "previews": true
+      }
+    }
+  ],
+  "builds": [
+    {
+      "platform": "linux/x86_64",
+      "version": "3374-rc3",
+      "components": [
+        "disc",
+        "patch-linux"
+      ],
+      "prepare": [
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Animations/",
+          "to_prefix": "Animations/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Benchmark/",
+          "to_prefix": "Benchmark/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_ForceFeedback/",
+          "to_prefix": "ForceFeedback/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Help/",
+          "to_prefix": "Help/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_KarmaData/",
+          "to_prefix": "KarmaData/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Maps/",
+          "to_prefix": "Maps/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Music/",
+          "to_prefix": "Music/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_StaticMeshes/",
+          "to_prefix": "StaticMeshes/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Textures/",
+          "to_prefix": "Textures/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Web/",
+          "to_prefix": "Web/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "English_Manual/",
+          "to_prefix": "Manual/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "English_Sounds_Speech_System_Help/",
+          "to_prefix": "",
+          "include": [
+            "**"
+          ],
+          "exclude": [
+            "*.bat",
+            "*.dll",
+            "*.exe"
+          ],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "patch-linux",
+          "from_prefix": "",
+          "to_prefix": "",
+          "include": [
+            "Help/**",
+            "Sounds/**",
+            "System/**",
+            "SystemLocalized/**",
+            "Textures/**",
+            "Web/**"
+          ],
+          "exclude": [],
+          "on_conflict": "replace"
+        }
+      ],
+      "required": [
+        "System/Engine.u",
+        "Maps/DM-Rankin.ut2",
+        "System/UT2004"
+      ],
+      "launch": {
+        "path": "System/UT2004",
+        "cwd": "System",
+        "args": []
+      },
+      "verify_native": true
+    },
+    {
+      "platform": "linux/aarch64",
+      "version": "3374-rc3",
+      "components": [
+        "disc",
+        "patch-linux"
+      ],
+      "prepare": [
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Animations/",
+          "to_prefix": "Animations/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Benchmark/",
+          "to_prefix": "Benchmark/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_ForceFeedback/",
+          "to_prefix": "ForceFeedback/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Help/",
+          "to_prefix": "Help/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_KarmaData/",
+          "to_prefix": "KarmaData/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Maps/",
+          "to_prefix": "Maps/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Music/",
+          "to_prefix": "Music/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_StaticMeshes/",
+          "to_prefix": "StaticMeshes/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Textures/",
+          "to_prefix": "Textures/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Web/",
+          "to_prefix": "Web/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "English_Manual/",
+          "to_prefix": "Manual/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "English_Sounds_Speech_System_Help/",
+          "to_prefix": "",
+          "include": [
+            "**"
+          ],
+          "exclude": [
+            "*.bat",
+            "*.dll",
+            "*.exe"
+          ],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "patch-linux",
+          "from_prefix": "",
+          "to_prefix": "",
+          "include": [
+            "Help/**",
+            "Sounds/**",
+            "System/**",
+            "SystemLocalized/**",
+            "Textures/**",
+            "Web/**",
+            "SystemARM64/**"
+          ],
+          "exclude": [],
+          "on_conflict": "replace"
+        }
+      ],
+      "required": [
+        "System/Engine.u",
+        "Maps/DM-Rankin.ut2",
+        "SystemARM64/UT2004"
+      ],
+      "launch": {
+        "path": "SystemARM64/UT2004",
+        "cwd": "SystemARM64",
+        "args": []
+      },
+      "verify_native": true
+    },
+    {
+      "platform": "linux/ppc64le",
+      "version": "3374-rc3",
+      "components": [
+        "disc",
+        "patch-linux"
+      ],
+      "prepare": [
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Animations/",
+          "to_prefix": "Animations/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Benchmark/",
+          "to_prefix": "Benchmark/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_ForceFeedback/",
+          "to_prefix": "ForceFeedback/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Help/",
+          "to_prefix": "Help/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_KarmaData/",
+          "to_prefix": "KarmaData/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Maps/",
+          "to_prefix": "Maps/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Music/",
+          "to_prefix": "Music/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_StaticMeshes/",
+          "to_prefix": "StaticMeshes/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Textures/",
+          "to_prefix": "Textures/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Web/",
+          "to_prefix": "Web/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "English_Manual/",
+          "to_prefix": "Manual/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "English_Sounds_Speech_System_Help/",
+          "to_prefix": "",
+          "include": [
+            "**"
+          ],
+          "exclude": [
+            "*.bat",
+            "*.dll",
+            "*.exe"
+          ],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "patch-linux",
+          "from_prefix": "",
+          "to_prefix": "",
+          "include": [
+            "Help/**",
+            "Sounds/**",
+            "System/**",
+            "SystemLocalized/**",
+            "Textures/**",
+            "Web/**",
+            "SystemPPC64LE/**"
+          ],
+          "exclude": [],
+          "on_conflict": "replace"
+        }
+      ],
+      "required": [
+        "System/Engine.u",
+        "Maps/DM-Rankin.ut2",
+        "SystemPPC64LE/UT2004"
+      ],
+      "launch": {
+        "path": "SystemPPC64LE/UT2004",
+        "cwd": "SystemPPC64LE",
+        "args": []
+      },
+      "verify_native": true
+    },
+    {
+      "platform": "macos/x86_64",
+      "version": "3374-rc3",
+      "components": [
+        "disc",
+        "patch-macos"
+      ],
+      "prepare": [
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Animations/",
+          "to_prefix": "GameData/Animations/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Benchmark/",
+          "to_prefix": "GameData/Benchmark/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_ForceFeedback/",
+          "to_prefix": "GameData/ForceFeedback/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Help/",
+          "to_prefix": "GameData/Help/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_KarmaData/",
+          "to_prefix": "GameData/KarmaData/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Maps/",
+          "to_prefix": "GameData/Maps/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Music/",
+          "to_prefix": "GameData/Music/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_StaticMeshes/",
+          "to_prefix": "GameData/StaticMeshes/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Textures/",
+          "to_prefix": "GameData/Textures/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Web/",
+          "to_prefix": "GameData/Web/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "English_Manual/",
+          "to_prefix": "GameData/Manual/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "English_Sounds_Speech_System_Help/",
+          "to_prefix": "GameData/",
+          "include": [
+            "Sounds/**",
+            "Speech/**",
+            "Help/**"
+          ],
+          "exclude": [
+            "*.bat",
+            "*.dll",
+            "*.exe"
+          ],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "patch-macos",
+          "from_prefix": "OldUnreal-UT2004Patch-3374/UT2004.app/",
+          "to_prefix": "UT2004.app/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        }
+      ],
+      "required": [
+        "UT2004.app/Contents/Info.plist",
+        "GameData/Maps/DM-Rankin.ut2",
+        "UT2004.app/Contents/MacOS/UT2004"
+      ],
+      "launch": {
+        "path": "UT2004.app/Contents/MacOS/UT2004",
+        "cwd": "UT2004.app/Contents/MacOS",
+        "args": []
+      },
+      "verify_native": true,
+      "unresolved": [
+        "OldUnreal requires the prepared GameData folders in ~/Library/Application Support/UT2004. The current client does not install content into this location."
+      ]
+    },
+    {
+      "platform": "macos/aarch64",
+      "version": "3374-rc3",
+      "components": [
+        "disc",
+        "patch-macos"
+      ],
+      "prepare": [
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Animations/",
+          "to_prefix": "GameData/Animations/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Benchmark/",
+          "to_prefix": "GameData/Benchmark/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_ForceFeedback/",
+          "to_prefix": "GameData/ForceFeedback/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Help/",
+          "to_prefix": "GameData/Help/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_KarmaData/",
+          "to_prefix": "GameData/KarmaData/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Maps/",
+          "to_prefix": "GameData/Maps/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Music/",
+          "to_prefix": "GameData/Music/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_StaticMeshes/",
+          "to_prefix": "GameData/StaticMeshes/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Textures/",
+          "to_prefix": "GameData/Textures/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Web/",
+          "to_prefix": "GameData/Web/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "English_Manual/",
+          "to_prefix": "GameData/Manual/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "English_Sounds_Speech_System_Help/",
+          "to_prefix": "GameData/",
+          "include": [
+            "Sounds/**",
+            "Speech/**",
+            "Help/**"
+          ],
+          "exclude": [
+            "*.bat",
+            "*.dll",
+            "*.exe"
+          ],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "patch-macos",
+          "from_prefix": "OldUnreal-UT2004Patch-3374/UT2004.app/",
+          "to_prefix": "UT2004.app/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        }
+      ],
+      "required": [
+        "UT2004.app/Contents/Info.plist",
+        "GameData/Maps/DM-Rankin.ut2",
+        "UT2004.app/Contents/MacOS/UT2004"
+      ],
+      "launch": {
+        "path": "UT2004.app/Contents/MacOS/UT2004",
+        "cwd": "UT2004.app/Contents/MacOS",
+        "args": []
+      },
+      "verify_native": true,
+      "unresolved": [
+        "OldUnreal requires the prepared GameData folders in ~/Library/Application Support/UT2004. The current client does not install content into this location."
+      ]
+    },
+    {
+      "platform": "windows/x86_64",
+      "version": "3374-rc3",
+      "components": [
+        "disc",
+        "patch-windows"
+      ],
+      "prepare": [
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Animations/",
+          "to_prefix": "Animations/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Benchmark/",
+          "to_prefix": "Benchmark/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_ForceFeedback/",
+          "to_prefix": "ForceFeedback/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Help/",
+          "to_prefix": "Help/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_KarmaData/",
+          "to_prefix": "KarmaData/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Maps/",
+          "to_prefix": "Maps/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Music/",
+          "to_prefix": "Music/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_StaticMeshes/",
+          "to_prefix": "StaticMeshes/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Textures/",
+          "to_prefix": "Textures/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "All_Web/",
+          "to_prefix": "Web/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "English_Manual/",
+          "to_prefix": "Manual/",
+          "include": [
+            "**"
+          ],
+          "exclude": [],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "disc",
+          "operation": "installshield-cab",
+          "from_prefix": "English_Sounds_Speech_System_Help/",
+          "to_prefix": "",
+          "include": [
+            "**"
+          ],
+          "exclude": [
+            "*.bat",
+            "*.dll",
+            "*.exe"
+          ],
+          "on_conflict": "reject"
+        },
+        {
+          "component": "patch-windows",
+          "from_prefix": "",
+          "to_prefix": "",
+          "include": [
+            "Help/**",
+            "Sounds/**",
+            "System/**",
+            "SystemLocalized/**",
+            "Textures/**",
+            "Web/**"
+          ],
+          "exclude": [],
+          "on_conflict": "replace"
+        }
+      ],
+      "required": [
+        "System/Engine.u",
+        "Maps/DM-Rankin.ut2",
+        "System/UT2004.exe"
+      ],
+      "launch": {
+        "path": "System/UT2004.exe",
+        "cwd": "System",
+        "args": []
+      },
+      "verify_native": true
+    }
+  ],
+  "aliases": [
+    "UT2004",
+    "Unreal Tournament 2004: Editor's Choice Edition"
+  ]
+}

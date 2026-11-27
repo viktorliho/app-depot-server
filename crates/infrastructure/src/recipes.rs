@@ -118,6 +118,7 @@ impl Layout {
 }
 
 struct ReleaseRow {
+    build_platform: Option<String>,
     app_id: String,
     owner: String,
     public: bool,
@@ -131,10 +132,11 @@ async fn release(
     conn: &mut SqliteConnection,
     id: &str,
 ) -> Result<Option<ReleaseRow>, CatalogError> {
-    let row = sqlx::query("SELECT r.app_id, r.state, r.version, r.etag_version, a.owner_id, a.visibility, a.kind FROM releases r JOIN apps a ON a.id=r.app_id WHERE r.id=?")
+    let row = sqlx::query("SELECT r.app_id, r.build_platform, r.state, r.version, r.etag_version, a.owner_id, a.visibility, a.kind FROM releases r JOIN apps a ON a.id=r.app_id WHERE r.id=?")
         .bind(id).fetch_optional(conn).await?;
     row.map(|row| {
         Ok(ReleaseRow {
+            build_platform: row.try_get("build_platform")?,
             app_id: row.try_get("app_id")?,
             owner: row.try_get("owner_id")?,
             public: row.try_get::<&str, _>("visibility")? == "Public",
@@ -418,6 +420,13 @@ impl Resolver<'_> {
         check_launch: bool,
     ) -> Result<Layout, CatalogError> {
         recipe.validate()?;
+        if row
+            .build_platform
+            .as_deref()
+            .is_some_and(|p| p != self.platform)
+        {
+            return Err(RecipeError::Platform.into());
+        }
         if self.active.len() >= 16 {
             return Err(RecipeError::Limit.into());
         }
@@ -454,8 +463,8 @@ impl Resolver<'_> {
                 }
                 let selected = match &dep.selector {
                     Selector::Latest => sqlx::query_scalar(
-                        "SELECT id FROM releases WHERE app_id=? AND state='Published' ORDER BY publication_order DESC LIMIT 1",
-                    ).bind(&dep.app_id).fetch_optional(&mut *self.conn).await?.ok_or(RecipeError::Unavailable)?,
+                        "SELECT id FROM releases WHERE app_id=? AND state='Published' AND (build_platform IS NULL OR build_platform=?) ORDER BY publication_order DESC LIMIT 1",
+                    ).bind(&dep.app_id).bind(self.platform).fetch_optional(&mut *self.conn).await?.ok_or(RecipeError::Unavailable)?,
                     Selector::Release { release_id } => release_id.clone(),
                     Selector::Channel { name } => sqlx::query_scalar("SELECT release_id FROM channels WHERE app_id=? AND name=?")
                         .bind(&dep.app_id).bind(name).fetch_optional(&mut *self.conn).await?.ok_or(RecipeError::Unavailable)?,
@@ -464,6 +473,13 @@ impl Resolver<'_> {
                     .await?
                     .filter(|row| row.app_id == dep.app_id && row.published)
                     .ok_or(RecipeError::Unavailable)?;
+                if dependency
+                    .build_platform
+                    .as_deref()
+                    .is_some_and(|p| p != self.platform)
+                {
+                    return Err(RecipeError::Platform.into());
+                }
                 if dep
                     .platforms
                     .as_ref()

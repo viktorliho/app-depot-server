@@ -137,3 +137,7 @@ Each case must be rejected before accepting an Artifact identity:
 | N12 | Logical entries: only empty directory `empty` | No regular file. |
 | N13 | Logical entries: symbolic link `link` plus file `a.txt` | Unsupported filesystem entry. |
 | N14 | ZIP file member `a.txt` with Unix execute bits set, imported as non-executable | Incorrect ZIP-to-tree executable mapping. |
+
+## Future relative links
+
+A future explicitly versioned tree and installation contract may represent a relative symbolic link by its path and exact target bytes. Ingestion must retain the link without following it. Canonical identity must distinguish the link from its target file. Validation must resolve the entire link graph against the final platform-specific installation layout and reject absolute targets, escapes, unsafe chains and cycles. Installation requires an explicit client capability and filesystem-safe materialization. Tree Identity v1 remains unchanged. A selected package subtree containing a required link is unsupported by v1. The external Applications shortcut outside the selected macOS bundle is not part of the payload.

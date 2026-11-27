@@ -1,0 +1,350 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "StoreRecipeV2"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "id": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^[a-z0-9]+([.-][a-z0-9]+)*$"
+    },
+    "title": {
+      "type": "string",
+      "maxLength": 160
+    },
+    "rights": {
+      "type": "string",
+      "maxLength": 4096
+    },
+    "upstream": {
+      "type": "string",
+      "pattern": "^https://",
+      "maxLength": 2048
+    },
+    "availability": {
+      "enum": [
+        "available",
+        "reviewRequired"
+      ]
+    },
+    "components": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 128,
+            "pattern": "^[a-z0-9]+([.-][a-z0-9]+)*$"
+          },
+          "url": {
+            "type": "string",
+            "pattern": "^https://",
+            "maxLength": 2048
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 8589934592
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "format": {
+            "enum": [
+              "raw",
+              "iso9660",
+              "7z",
+              "tar.bz2",
+              "zip",
+              "dmg-hfs"
+            ]
+          },
+          "discovery": {
+            "type": "string",
+            "pattern": "^https://",
+            "maxLength": 2048
+          },
+          "github": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "repository",
+              "prefix",
+              "suffix",
+              "previews"
+            ],
+            "properties": {
+              "repository": {
+                "type": "string",
+                "pattern": "^[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+$"
+              },
+              "prefix": {
+                "type": "string",
+                "minLength": 1
+              },
+              "suffix": {
+                "type": "string",
+                "minLength": 1
+              },
+              "previews": {
+                "type": "boolean"
+              },
+              "exclude": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "subtree": {
+            "type": "string",
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "name",
+          "url",
+          "bytes",
+          "sha256",
+          "format"
+        ]
+      },
+      "maxItems": 16,
+      "minItems": 1
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048
+    },
+    "publisher": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "steamId": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "builds": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "properties": {
+          "platform": {
+            "enum": [
+              "linux/x86_64",
+              "linux/aarch64",
+              "linux/ppc64le",
+              "linux/x86",
+              "windows/x86",
+              "windows/x86_64",
+              "windows/aarch64",
+              "macos/x86_64",
+              "macos/aarch64"
+            ]
+          },
+          "version": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "prepare": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "operation": {
+                      "enum": [
+                        "extract",
+                        "unreal-uz",
+                        "installshield-cab"
+                      ]
+                    },
+                    "component": {
+                      "type": "string",
+                      "maxLength": 128,
+                      "pattern": "^[a-z0-9]+([.-][a-z0-9]+)*$"
+                    },
+                    "from_prefix": {
+                      "type": "string",
+                      "maxLength": 1024
+                    },
+                    "to_prefix": {
+                      "type": "string",
+                      "maxLength": 1024
+                    },
+                    "include": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 1024
+                      },
+                      "maxItems": 128,
+                      "minItems": 1
+                    },
+                    "exclude": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 1024
+                      },
+                      "maxItems": 128,
+                      "minItems": 0
+                    },
+                    "on_conflict": {
+                      "enum": [
+                        "replace",
+                        "reject"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "component",
+                    "from_prefix",
+                    "to_prefix",
+                    "include",
+                    "exclude",
+                    "on_conflict"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "operation": {
+                      "const": "copy"
+                    },
+                    "from": {
+                      "type": "string",
+                      "maxLength": 1024
+                    },
+                    "to": {
+                      "type": "string",
+                      "maxLength": 1024
+                    },
+                    "on_conflict": {
+                      "enum": [
+                        "replace",
+                        "reject"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "operation",
+                    "from",
+                    "to",
+                    "on_conflict"
+                  ]
+                }
+              ]
+            },
+            "maxItems": 128,
+            "minItems": 1
+          },
+          "required": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "maxItems": 128,
+            "minItems": 0
+          },
+          "launch": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "path": {
+                "type": "string",
+                "maxLength": 1024
+              },
+              "cwd": {
+                "type": "string",
+                "maxLength": 1024
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "maxLength": 4096
+                },
+                "maxItems": 64,
+                "minItems": 0
+              }
+            },
+            "required": [
+              "path",
+              "cwd",
+              "args"
+            ]
+          },
+          "components": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "maxItems": 16
+          },
+          "verify_native": {
+            "type": "boolean"
+          },
+          "unresolved": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {
+              "type": "string",
+              "maxLength": 1024
+            }
+          }
+        },
+        "required": [
+          "platform",
+          "version",
+          "prepare",
+          "required",
+          "launch",
+          "components"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "aliases": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 160
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "revision",
+    "id",
+    "title",
+    "rights",
+    "upstream",
+    "availability",
+    "components",
+    "summary",
+    "publisher",
+    "builds"
+  ]
+}

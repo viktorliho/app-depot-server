@@ -45,8 +45,9 @@ struct AppPatch {
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ReleaseCreate {
+    build_platform: Option<String>,
     version: Option<String>,
 }
 
@@ -161,7 +162,18 @@ async fn list_releases(
         Some("published") => true,
         Some(_) => return Err(storage::CatalogError::Invalid.into()),
     };
-    let items = storage::list_releases(&state.pool, principal.as_ref(), &app_id, published).await?;
+    let platform = query.get("platform").map(String::as_str);
+    if platform.is_some_and(|p| !app_depot_domain::recipe::platform(p)) {
+        return Err(storage::CatalogError::Invalid.into());
+    }
+    let items = storage::list_releases(
+        &state.pool,
+        principal.as_ref(),
+        &app_id,
+        published,
+        platform,
+    )
+    .await?;
     let scope = format!(
         "{}:{}",
         app_id,
@@ -175,7 +187,11 @@ async fn list_releases(
         &query,
         "releases1",
         &scope,
-        if published { "published" } else { "" },
+        &format!(
+            "{}{}",
+            if published { "published" } else { "" },
+            platform.unwrap_or("")
+        ),
     )
 }
 
@@ -257,6 +273,7 @@ async fn create_release(
         key(&headers)?,
         &app_id,
         input.version.as_deref(),
+        input.build_platform.as_deref(),
     )
     .await?;
     json_response(

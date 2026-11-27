@@ -117,7 +117,10 @@ pub fn platform(value: &str) -> bool {
     matches!(
         value,
         "linux/x86_64"
+            | "linux/x86"
+            | "windows/x86"
             | "linux/aarch64"
+            | "linux/ppc64le"
             | "windows/x86_64"
             | "windows/aarch64"
             | "macos/x86_64"

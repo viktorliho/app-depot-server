@@ -567,7 +567,7 @@ mod tests {
         let app = create_app(&pool, &actor, "backup-app", "Backed up", Default::default())
             .await
             .unwrap();
-        let release = create_release(&pool, &actor, "backup-release", &app.id, None)
+        let release = create_release(&pool, &actor, "backup-release", &app.id, None, None)
             .await
             .unwrap();
         let upload_id = Uuid::new_v4().to_string();

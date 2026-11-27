@@ -292,7 +292,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let release = create_release(&pool, &actor, "declarations-release", &app.id, None)
+        let release = create_release(&pool, &actor, "declarations-release", &app.id, None, None)
             .await
             .unwrap();
         let (first, first_version) = get(&pool, Some(&actor), "App", &app.id).await.unwrap();

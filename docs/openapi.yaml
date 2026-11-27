@@ -359,6 +359,206 @@ paths:
       security:
       - bearerAuth: []
       - cookieAuth: []
+  /admin/store/activity:
+    get:
+      operationId: listStoreActivity
+      tags:
+      - Store
+      summary: List recent completed Store checks and acquisitions for a Server Admin
+      responses:
+        '200':
+          description: List recent completed Store checks and acquisitions for a Server
+            Admin
+          content:
+            application/json:
+              schema: &id001
+                type: array
+                items: &id002
+                  type: object
+  /admin/metadata-providers:
+    get:
+      operationId: metadataProviderSettings
+      tags:
+      - Metadata
+      summary: Read administrator provider settings and key presence
+      responses:
+        '200':
+          description: Read administrator provider settings and key presence
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  steam:
+                    type: boolean
+                  steamGridDb:
+                    type: boolean
+                  hasKey:
+                    type: boolean
+    put:
+      operationId: configureMetadataProviders
+      tags:
+      - Metadata
+      summary: Update administrator provider configuration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                steam:
+                  type: boolean
+                steamGridDb:
+                  type: boolean
+                key:
+                  type: string
+                  writeOnly: true
+      responses:
+        '204':
+          description: Update administrator provider configuration
+  /admin/metadata-providers/test:
+    post:
+      operationId: testMetadataProviders
+      tags:
+      - Metadata
+      summary: Verify configured metadata providers
+      responses:
+        '204':
+          description: Verify configured metadata providers
+  /metadata/steam/search:
+    get:
+      operationId: searchMetadata
+      tags:
+      - Metadata
+      summary: Search providers and catalog identities
+      parameters:
+      - name: q
+        in: query
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Search providers and catalog identities
+          content:
+            application/json:
+              schema: *id001
+  /metadata/steam/{id}:
+    get:
+      operationId: previewMetadata
+      tags:
+      - Metadata
+      summary: Preview descriptive fields for an explicit Steam identity
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+      responses:
+        '200':
+          description: Preview descriptive fields for an explicit Steam identity
+          content:
+            application/json:
+              schema: *id002
+  /metadata/steam/{id}/candidates/{role}:
+    get:
+      operationId: browseArtworkCandidates
+      tags:
+      - Metadata
+      summary: List optional artwork provider candidates
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+      - name: role
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: List optional artwork provider candidates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: integer
+  /metadata/steam/{id}/artwork/{role}:
+    get:
+      operationId: previewExternalArtwork
+      tags:
+      - Metadata
+      summary: Read a validated artwork preview from the Server
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+      - name: role
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: asset
+        in: query
+        required: false
+        schema:
+          type: integer
+      responses:
+        '200':
+          description: Read a validated artwork preview from the Server
+          content:
+            image/*:
+              schema:
+                type: string
+                format: binary
+  /apps/{app_id}/metadata/apply:
+    post:
+      operationId: applyProviderMetadata
+      tags:
+      - Metadata
+      summary: Apply selected metadata fields and artwork to a manageable App
+      parameters:
+      - name: app_id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - id
+              - fields
+              - artwork
+              properties:
+                id:
+                  type: integer
+                fields:
+                  type: array
+                  items:
+                    type: string
+                artwork:
+                  type: array
+                  items:
+                    type: string
+                assets:
+                  type: object
+                  additionalProperties:
+                    type: integer
+      responses:
+        '204':
+          description: Apply selected metadata fields and artwork to a manageable App
   /admin/store:
     get:
       summary: Browse the accepted Store catalog
@@ -413,6 +613,20 @@ paths:
     post:
       summary: Acquire a Store application
       description: Requires Server Admin permission.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [platforms]
+              properties:
+                platforms:
+                  type: array
+                  minItems: 1
+                  uniqueItems: true
+                  items: {type: string}
       responses:
         '202':
           description: Acquire a Store application
@@ -1844,6 +2058,10 @@ paths:
         schema:
           type: string
         description: Opaque cursor; invalid/expired returns 400.
+      - name: platform
+        in: query
+        description: Return only releases with this explicit OS and CPU build target.
+        schema: { $ref: '#/components/schemas/RecipePlatform' }
       - name: order
         in: query
         schema: { type: string, const: published }
@@ -5607,10 +5825,12 @@ components:
       properties:
         generation:
           type: integer
+        source: {type: string}
+        refreshedAt: {type: [integer, 'null']}
         recipes:
           type: array
           items:
-            $ref: ../store/schemas/recipe.json
+            $ref: ../store/v2/schemas/recipe.json
     StoreObservation:
       type: object
       required:
@@ -5635,6 +5855,20 @@ components:
           type: string
         title:
           type: string
+        product: {type: string}
+        platform: {type: string}
+        currentVersion: {type: [string, 'null']}
+        successfulCheck: {type: [integer, 'null']}
+        progress:
+          type: [object, 'null']
+          properties:
+            stage: {type: string}
+            component: {type: string}
+            componentsDone: {type: integer}
+            componentsTotal: {type: integer}
+            done: {type: integer}
+            total: {type: [integer, 'null']}
+            bytesPerSecond: {type: [integer, 'null']}
         revision:
           type: integer
         app:
@@ -5930,7 +6164,7 @@ components:
       description: Any JSON value, including null; server-managed fields remain outside data. Object values may use the optional appDepot convention described in architecture.md. NativePortableV1 is an optional entry-point method. On Release writes the optional appDepot.installation property is validated as InstallationManifestV1. Neither grants Server execution capability.
     NativePlatform:
       type: string
-      enum: [linux/x86_64, linux/aarch64, windows/x86_64, windows/aarch64, macos/x86_64, macos/aarch64]
+      enum: [linux/x86_64, linux/x86, linux/aarch64, linux/ppc64le, windows/x86_64, windows/x86, windows/aarch64, macos/x86_64, macos/aarch64]
       description: Exact host OS/architecture token for NativePortableV1. Unknown tokens remain storable but have no v1 match; aliases and case folding are not defined.
     InstallationLocalizationV1:
       oneOf:
@@ -6176,7 +6410,7 @@ components:
       enum: [standard, derived]
     RecipePlatform:
       type: string
-      enum: [linux/x86_64, linux/aarch64, windows/x86_64, windows/aarch64, macos/x86_64, macos/aarch64]
+      enum: [linux/x86_64, linux/x86, linux/aarch64, linux/ppc64le, windows/x86_64, windows/x86, windows/aarch64, macos/x86_64, macos/aarch64]
     RecipeV1:
       type: object
       required: [version, dependencies, targets]
@@ -6419,6 +6653,7 @@ components:
     Release:
       type: object
       properties:
+        buildPlatform: { $ref: '#/components/schemas/RecipePlatform' }
         id:
           type: string
           format: uuid
@@ -6442,6 +6677,7 @@ components:
     ReleaseCreate:
       type: object
       properties:
+        buildPlatform: { $ref: '#/components/schemas/RecipePlatform' }
         version:
           anyOf:
           - type: string

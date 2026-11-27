@@ -1,7 +1,7 @@
 import { InstallationStages } from './installation-stages'
 import { DiscoveryReview, type DiscoveryReport } from './installation-discovery'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { isRelativeInstallPath, platformName, planTotals, prerequisiteIssue, publisherEvidence } from './installation-review'
+import { platforms, isRelativeInstallPath, platformName, planTotals, prerequisiteIssue, publisherEvidence } from './installation-review'
 import { ApiError, apiRequest, idempotencyKey, jsonBody, resource, type Artifact, type Association, type Declaration, type DeclarationSnapshot, type Page } from './api'
 import { LoadingState, ProblemNotice } from './components'
 import { useAuth } from './portal'
@@ -9,7 +9,6 @@ import { ArtifactPicker, ResolvedTreePicker } from './artifact-browser'
 import { depot, fileSize, manifest as gogManifest, record, strings, text } from './release-information'
 import { useResource } from './use-resource'
 
-const platforms = ['windows/x86_64', 'windows/aarch64', 'linux/x86_64', 'linux/aarch64', 'macos/x86_64', 'macos/aarch64']
 type Copy = { associationId: string; source?: string; destination: string; collision?: 'reject' | 'replaceFile'; platforms?: string[] }
 type Choice = { id: string; name: string; payload: Copy[] }
 type Group = { id: string; name: string; language?: boolean; multiple?: boolean; required?: boolean; defaults?: string[]; choices: Choice[] }

@@ -139,3 +139,26 @@ and do not authenticate publishers or establish installation readiness. Register
 discovery verifies inspected CAS bytes against inventory digests and proposes generic
 InstallationManifestV1 prerequisites through an owner/admin endpoint. The publisher
 applies them through the existing declaration revision flow.
+
+## Logical applications and build targets
+
+An App owns the product identity, library visibility, artwork and descriptive metadata.
+A Release can declare one immutable target operating system and CPU architecture in
+`buildPlatform`. Each build has its own publication order, artifact associations,
+entry points, prerequisites and installation declarations. A target can receive
+new versions while another target stays on an older working version. Identical
+file content in separate Tree Artifacts shares CAS objects.
+
+For example, create one App, then create a release targeting `windows/x86_64`.
+Associate its Windows tree, select the executable in the Entry Point editor,
+configure the installation plan and publish. Create a second release under the
+same App for `linux/aarch64`, associate the Linux tree and configure its launch
+declaration. Subsequent versions follow the same workflow. Clients listing
+targeted builds can request `?platform=linux/aarch64&order=published` on the
+App releases collection. Client runtime choices such as Wine do not change a
+Windows release's target.
+
+The stable App ID provides the namespace for future cloud save declarations.
+A future compatible-data group can specify platform paths and format compatibility
+independently of device, runtime, release, installation path or artifact identity.
+A Wine prefix is not a save-data group.

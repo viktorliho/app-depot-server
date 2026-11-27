@@ -222,7 +222,7 @@ pub async fn resolve(
     input: &Request,
 ) -> Result<Value, CatalogError> {
     let mut tx = pool.begin().await?;
-    let (app, owner, public): (String, String, bool) = sqlx::query_as("SELECT a.id,a.owner_id,a.visibility='Public' AND r.state='Published' FROM releases r JOIN apps a ON a.id=r.app_id WHERE r.id=?")
+    let (app, owner, build_platform, public): (String, String, Option<String>, bool) = sqlx::query_as("SELECT a.id,a.owner_id,r.build_platform,a.visibility='Public' AND r.state='Published' FROM releases r JOIN apps a ON a.id=r.app_id WHERE r.id=?")
         .bind(release).fetch_optional(&mut *tx).await?.ok_or(CatalogError::NotFound)?;
     let anonymous = actor.is_none()
         && sqlx::query_scalar::<_, bool>(
@@ -260,7 +260,8 @@ pub async fn resolve(
     let manifest = parse(&value)?;
     validate_references(&mut tx, release, &manifest).await?;
     let platform = &input.platform;
-    if !recipe::platform(platform)
+    if build_platform.as_ref().is_some_and(|p| p != platform)
+        || !recipe::platform(platform)
         || data.pointer("/appDepot/platforms").is_some_and(|value| {
             platform_list(value)
                 .is_none_or(|list| !list.is_empty() && !list.contains(&platform.as_str()))
@@ -524,9 +525,22 @@ pub(crate) async fn seed_import(
     if metadata.pointer("/appDepot/store").is_some() {
         let point = &metadata["appDepot"]["entryPoints"][0];
         let revision = document_in_tx(tx, "Association", association).await?;
-        let manifest = json!({"version":1,"payload":[{"associationId":association,"destination":"","platforms":point["platforms"]}],
+        let manifest = json!({"version":1,"unresolved":metadata.pointer("/appDepot/store/unresolved").cloned().unwrap_or_else(||json!([])), "payload":[{"associationId":association,"destination":"","platforms":point["platforms"]}],
             "launch":{"associationId":association,"revisionId":revision.revision_id,"entryPointId":point["id"],"destination":point["target"]["path"]}});
         parse(&manifest)?;
+        let platform = point["platforms"][0]
+            .as_str()
+            .ok_or(CatalogError::Invalid)?;
+        let updated = sqlx::query("UPDATE releases SET build_platform=? WHERE id=? AND state='Draft' AND (build_platform IS NULL OR build_platform=?)")
+            .bind(platform)
+            .bind(release)
+            .bind(platform)
+            .execute(&mut **tx)
+            .await?;
+        if updated.rows_affected() != 1 {
+            return Err(CatalogError::Conflict);
+        }
+        data["appDepot"]["platforms"] = point["platforms"].clone();
         data["appDepot"]["installation"] = manifest;
         crate::declarations::append(tx, "Release", release, &data).await?;
         return Ok(());

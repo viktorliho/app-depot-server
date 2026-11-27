@@ -314,3 +314,14 @@ td small { display: block; color: var(--muted); margin-top: 4px; }
 .installation-actions { background: var(--surface); border-top: 1px solid var(--border); padding-block: .5rem; }
 .installation-actions p { margin-block: .25rem .5rem; }
 .field-error { background: var(--danger-soft); color: var(--danger); }
+
+.store-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,18rem),1fr)); gap:1rem; }
+.store-card { display:grid; grid-template-columns:minmax(5rem,35%) minmax(0,1fr); gap:1rem; align-items:start; }
+.store-card h2 { margin:.2rem 0; font-size:1.15rem; }
+.store-cover { width:100%; aspect-ratio:2/3; object-fit:cover; border-radius:.4rem; }
+.store-placeholder { display:grid;place-items:center;background:var(--accent-soft);color:var(--text);font-size:1.5rem;font-weight:700; }
+.store-filters { display:flex;gap:1rem;flex-wrap:wrap;margin:1rem 0; }
+.store-progress { display:grid;gap:.25rem;margin:.5rem 0; }
+.store-build { border-top:1px solid var(--border);padding:.8rem 0; }
+
+.store-owned-title {display:flex;align-items:center;gap:1rem}.store-owned-title .store-cover {width:48px;height:64px;flex:none;object-fit:cover}

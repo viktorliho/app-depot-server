@@ -1,4 +1,4 @@
-import { platformName } from './installation-review'
+import { platforms, platformName } from './installation-review'
 import { useEffect, useRef, useState } from 'react'
 import { ApiError, apiRequest, idempotencyKey, jsonBody, resource, type Artifact, type Declaration } from './api'
 import { ArtifactPicker } from './artifact-browser'
@@ -131,7 +131,7 @@ export function EntryPointDialog({ item, releaseId, associationId, allowed, targ
         {allowed && <label>Add target platform<select value="" onChange={event => {
           if (event.target.value) changeEntry(index, { platforms: [...strings(entry.platforms), event.target.value] })
         }}><option value="">Choose a platform</option>
-          {['windows/x86_64', 'windows/aarch64', 'linux/x86_64', 'linux/aarch64', 'macos/x86_64', 'macos/aarch64']
+          {platforms
             .filter(platform => !strings(entry.platforms).includes(platform))
             .map(platform => <option key={platform} value={platform}>{platformName(platform)}{releasePlatforms.includes(platform) ? ' · Release target' : ''}</option>)}
         </select></label>}

@@ -45,6 +45,8 @@ pub struct Release {
     pub app_id: String,
     pub state: String,
     pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_platform: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

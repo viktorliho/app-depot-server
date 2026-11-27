@@ -31,6 +31,7 @@ mod declarations;
 mod diagnostics;
 mod discovery;
 mod download;
+mod enrichment;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod extractor_sandbox;
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
@@ -49,7 +50,9 @@ mod import_source;
 mod recipes;
 mod server_import;
 mod store;
+mod store_binary;
 mod store_cab;
+mod store_dmg;
 mod store_prepare;
 mod store_uz;
 mod upload;
@@ -299,9 +302,14 @@ async fn server_main() -> Result<(), Box<dyn std::error::Error>> {
                 gog_permit: Arc::new(tokio::sync::Semaphore::new(1)),
                 gog_scratch,
             };
+            let providers = enrichment::Providers::new(artwork::ArtworkState {
+                auth: auth_state.clone(),
+                root: Arc::new(lock.path.clone()),
+            });
             let (store_router, store_state) = store::router(
                 import_state.clone(),
                 &import_source::reset_scratch(lock.path.join("store-work"))?,
+                providers.clone(),
             )?;
             let api = auth::router(auth_state.clone())
                 .merge(backups::router(backups::BackupState {
@@ -317,6 +325,7 @@ async fn server_main() -> Result<(), Box<dyn std::error::Error>> {
                     auth: auth_state.clone(),
                     root: Arc::new(lock.path.clone()),
                 }))
+                .merge(enrichment::router(providers))
                 .merge(store_router)
                 .merge(recipes::router(auth_state.clone()))
                 .merge(declarations::router(auth_state.clone()))
