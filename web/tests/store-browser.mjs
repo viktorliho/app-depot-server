@@ -20,6 +20,8 @@ try {
   await page.locator('summary').filter({ hasText: 'Store Fixture' }).waitFor({ state: 'detached' })
   await page.getByRole('searchbox').fill('Fixture')
   await page.locator('summary').filter({ hasText: 'Store Fixture' }).click()
+  await page.getByText('Redistribution permission unconfirmed.', { exact: false }).waitFor()
+  await page.getByText('Acquisition: Available').waitFor()
   await page.getByRole('button', { name: 'Add to server' }).click()
   await page.getByRole('heading', { name: 'Observed applications' }).waitFor()
   await page.getByRole('link', { name: 'Store Fixture', exact: true }).waitFor()

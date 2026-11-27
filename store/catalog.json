@@ -3,16 +3,16 @@
   "recipes": [
     {
       "id": "org.oldunreal.unreal-gold",
-      "sha256": "bd123759cfe8d6c95912e16ed2ba2ca761af37af38462adcada4cd3a4649cfb0"
+      "sha256": "0b4fc7538ce0311c9efd18654e4ebf6deecb09639d52eabef55dadbd7da65cd3"
     },
     {
       "id": "org.oldunreal.unreal-tournament-2004-ece",
-      "sha256": "f5ae58407d2a8d8379775913a0c2fadc581e9c0741bd951ffb5f4891fafb33fe"
+      "sha256": "4e1eba929d7a84c1a0b629f08a83c894376985f8594ffc4c8fd8047f364246f5"
     },
     {
       "id": "org.oldunreal.unreal-tournament-goty",
-      "sha256": "cd8b2f00d3265e91acca307504e18389597bf5a0a4d4732504440db340d18c89"
+      "sha256": "58c16bf6ad4a15d212f15d5bfcc7aec781083447a7ad6dad631afdd46a319c82"
     }
   ],
-  "generation": 1
+  "generation": 2
 }

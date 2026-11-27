@@ -97,13 +97,17 @@ export function StorePage() {
     {catalog.loading && <LoadingState label="Loading catalog…" />}
     {catalog.value && <section className="panel recipe-panel">
       <p>{catalog.value.generation ? 'Catalog generation ' + catalog.value.generation : 'Refresh the catalog to browse recipes.'}</p>
+      <p>Files are acquired directly from upstream. App Depot grants no additional rights to use or redistribute software. Operators are responsible for compliance with applicable license terms.</p>
       <label>Search applications <input type="search" value={query} onChange={event => setQuery(event.target.value)} /></label>
       {query && !matches.length && <p>No matching applications.</p>}
       {matches.map(recipe =>
         <details className="technical-details" key={recipe.id}><summary>{recipe.title}</summary>
-          <p>{recipe.platform} · {recipe.version} · Recipe revision {recipe.revision}</p>
-          <p>{recipe.rights}</p><a href={recipe.upstream} rel="noreferrer">Official upstream</a>
-          {recipe.availability === 'reviewRequired' ? <p>Rights review required</p> :
+          <p>Upstream version {recipe.version} · {recipe.platform} · Recipe revision {recipe.revision}</p>
+          <p>Acquisition: {recipe.availability === 'available' ? 'Available' : 'Pending recipe review'}</p>
+          {observations.filter(row => row.id === recipe.id).map(row => <p key={row.id}>Observation: <StatusBadge value={row.status} /> · Periodic checks {row.enabled ? 'on' : 'off'}</p>)}
+          <p>Upstream source: <a href={recipe.upstream} rel="noreferrer">{recipe.upstream}</a></p>
+          <p><strong>Licensing</strong> · {recipe.rights}</p>
+          {recipe.availability === 'available' &&
             <button className="button button-primary" disabled={busy || observations.some(row => row.id === recipe.id)} onClick={() => add(recipe.id)}>Add to server</button>}
           {observations.some(row => row.id === recipe.id && row.revision < recipe.revision) && recipe.availability === 'available' &&
             <button className="button" disabled={busy} onClick={() => add(recipe.id, 'adopt')}>Apply recipe revision {recipe.revision}</button>}

@@ -1218,6 +1218,18 @@ try {
   await configuration.getByLabel('Preview platform').selectOption('linux/x86_64')
   await configuration.getByRole('button', { name: 'Validate and preview' }).click()
   await configuration.getByText('1 files · 0 directories').waitFor()
+  const priorViewport = page.viewportSize()
+  for (const width of [540, 960]) {
+    await page.setViewportSize({ width, height: 640 })
+    const plan = configuration.locator('.installation-plan')
+    await plan.scrollIntoViewIfNeeded()
+    const overlaps = await plan.evaluate(list =>
+      list.closest('section').getBoundingClientRect().bottom >
+      document.querySelector('.installation-actions').getBoundingClientRect().top)
+    if (overlaps) throw new Error('Save toolbar overlaps installation preview')
+  }
+  if (priorViewport) await page.setViewportSize(priorViewport)
+
   await configuration.getByRole('button', { name: /^Payload/ }).click()
   await configuration.getByLabel('Artifact association').selectOption('')
   await configuration.getByLabel('Artifact association').selectOption(treeAssociationId)

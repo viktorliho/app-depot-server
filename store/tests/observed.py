@@ -74,7 +74,7 @@ def run(root, binary):
 
     component = payload("v1")
     recipe = dict(schema="StoreRecipeV1", revision=1, id="demo", title="Store Fixture", version="v1",
-                  upstream=origin, rights="Fixture authored for this test.", availability="available",
+                  upstream=origin, rights="Redistribution permission unconfirmed.", availability="available",
                   platform="linux-x86_64", components=[dict(name="base", url=origin + "/payload.zip",
                   format="zip", discovery=origin + "/latest.json", sha256=component["sha256"], bytes=component["bytes"])],
                   prepare=[dict(component="base", from_prefix="", to_prefix="", include=["**"], exclude=[], on_conflict="reject")],
@@ -185,6 +185,13 @@ def run(root, binary):
         rejected(422, "POST", "/admin/store/refresh")
         assert api("GET", "/admin/store")["generation"] == 2
         del recipe["prepare"][0]["operation"]
+        for field, invalid in [("schema", "StoreRecipeV2"), ("required", ["../outside"])]:
+            original = recipe[field]
+            recipe[field] = invalid
+            index(3, ["demo", "another"])
+            rejected(422, "POST", "/admin/store/refresh")
+            assert api("GET", "/admin/store")["generation"] == 2
+            recipe[field] = original
         index(3, ["demo", "another"])
         api("POST", "/admin/store/refresh")
         # Advance the persisted deadline in this disposable instance only.
@@ -195,7 +202,8 @@ def run(root, binary):
         assert second["app"] == first["app"] and second["release"] != first["release"]
         plan = api("POST", "/releases/" + second["release"] + "/installation/resolve", {"platform":"linux/x86_64"})
         assert plan["launch"]["path"] == "bin/demo"
-        assert api("GET", "/apps/" + first["app"])["kind"] == "standard"
+        app = api("GET", "/apps/" + first["app"])
+        assert app["kind"] == "standard" and app["visibility"] == "Private"
         payload("v3")
         (upstream / "payload.zip").write_bytes(b"corrupt")
         api("POST", "/admin/store/demo/check")

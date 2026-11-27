@@ -1,10 +1,10 @@
 {
   "schema": "StoreRecipeV1",
-  "revision": 1,
+  "revision": 2,
   "id": "org.oldunreal.unreal-tournament-2004-ece",
   "title": "Unreal Tournament 2004 ECE",
   "upstream": "https://www.oldunreal.com/downloads/ut2004/full-game-installers/",
-  "availability": "reviewRequired",
+  "availability": "available",
   "platform": "linux-x86_64",
   "version": "3374-rc3",
   "components": [

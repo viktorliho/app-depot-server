@@ -246,7 +246,7 @@ async fn cached_recipe(state: &Store, id: &str) -> Result<Value, ApiError> {
         return Err(ApiError::problem(
             StatusCode::CONFLICT,
             "store_rights_review",
-            "Acquisition requires rights review",
+            "Acquisition is unavailable pending recipe review",
         ));
     }
     Ok(recipe)
@@ -564,7 +564,7 @@ async fn run(s: &Store, r: sqlx::sqlite::SqliteRow) -> Result<(), String> {
     let scratch = s.scratch.clone();
     cached_recipe(s, &id)
         .await
-        .map_err(|_| "Catalog entry unavailable or requires rights review")?;
+        .map_err(|_| "Catalog entry unavailable or pending recipe review")?;
     let (recipe, validators) = if let Some(pending) = r.get::<Option<String>, _>("pending") {
         serde_json::from_str(&pending).map_err(|_| DB)?
     } else {
@@ -694,7 +694,7 @@ async fn run(s: &Store, r: sqlx::sqlite::SqliteRow) -> Result<(), String> {
     if record.state == "Draft" {
         cached_recipe(s, &id)
             .await
-            .map_err(|_| "Catalog entry unavailable or requires rights review")?;
+            .map_err(|_| "Catalog entry unavailable or pending recipe review")?;
         installation::resolve(
             pool,
             Some(&actor),

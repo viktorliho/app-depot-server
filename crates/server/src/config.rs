@@ -36,6 +36,7 @@ pub fn production(path: Option<&Path>) -> Result<ProductionConfig, Box<dyn std::
         "APP_DEPOT_UPLOAD_IDLE_SECONDS",
         "APP_DEPOT_TRUSTED_PROXY_PEERS",
         "APP_DEPOT_IMPORT_ROOTS",
+        "APP_DEPOT_STORE_SOURCE",
     ];
     for (name, _) in env::vars_os() {
         if let Some(name) = name.to_str() {

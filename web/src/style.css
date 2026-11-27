@@ -311,8 +311,6 @@ td small { display: block; color: var(--muted); margin-top: 4px; }
 .release-nav a[aria-current], .installation-stages button[aria-pressed=true] { background: var(--accent-soft); }
 .installation-workspace fieldset, .installation-workspace input, .installation-workspace select { min-width: 0; }
 .installation-workspace { overflow-wrap: anywhere; }
-.installation-actions { position: sticky; bottom: 0; z-index: 1; background: var(--surface); border-top: 1px solid var(--border); padding-block: .5rem; }
+.installation-actions { background: var(--surface); border-top: 1px solid var(--border); padding-block: .5rem; }
 .installation-actions p { margin-block: .25rem .5rem; }
 .field-error { background: var(--danger-soft); color: var(--danger); }
-
-@media (max-width: 520px) { .installation-actions { position: static; } }
